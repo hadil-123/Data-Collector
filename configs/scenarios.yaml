@@ -1,0 +1,90 @@
+# Liste des scénarios
+scenarios:
+  # Déplacement (D)
+  - id: D1
+    label: "Déplacement naturel (baseline)"
+    category: "Déplacement"
+    zone: "Z2"
+    difficulty: "facile"
+    num_people: 1
+    
+  - id: D2
+    label: "Personne statique (assis salon)"
+    category: "Déplacement"
+    zone: "Z2"
+    difficulty: "facile à intermédiaire"
+    num_people: 1
+    
+  - id: D3
+    label: "Entrée / sortie naturelle"
+    category: "Déplacement"
+    zone: "Z1"
+    difficulty: "intermédiaire"
+    num_people: 1
+  
+  # Stop-and-Go (T)
+  - id: T1
+    label: "Stop-and-Go naturel"
+    category: "Arrêt"
+    zone: "Z2 ou Z1"
+    difficulty: "intermédiaire"
+    num_people: 1
+    
+  - id: T2
+    label: "Occlusion naturelle par mobilier"
+    category: "Arrêt"
+    zone: "Z2"
+    difficulty: "intermédiaire à difficile"
+    num_people: 1
+    
+  - id: T3
+    label: "Transition inter-zones (Z1 ↔ Z2)"
+    category: "Arrêt"
+    zone: "Z1 ↔ Z2"
+    difficulty: "intermédiaire"
+    num_people: 1
+  
+  # Activités (A)
+  - id: A1
+    label: "Entrer avec un sac d'épicerie"
+    category: "Activités"
+    zone: "Z1"
+    difficulty: "intermédiaire"
+    num_people: 1
+    
+  - id: A2
+    label: "Vider / ranger l'épicerie"
+    category: "Activités"
+    zone: "Z1"
+    difficulty: "difficile"
+    num_people: 1
+    
+  - id: A3
+    label: "Interaction avec le réfrigérateur (porte = occlusion)"
+    category: "Activités"
+    zone: "Z1"
+    difficulty: "difficile"
+    num_people: 1
+  
+  # Multi-personnes (M)
+  - id: M1
+    label: "Croisement naturel"
+    category: "Multi-personnes"
+    zone: "Z2"
+    difficulty: "difficile"
+    num_people: 2
+    
+  - id: M2
+    label: "Marche côte à côte (proximité)"
+    category: "Multi-personnes"
+    zone: "Z2"
+    difficulty: "difficile"
+    num_people: 2
+    
+  - id: M3
+    label: "Deux personnes effectuant la même activité (cuisine)"
+    category: "Multi-personnes"
+    zone: "Z1"
+    difficulty: "très difficile"
+    num_people: 2
+# ...

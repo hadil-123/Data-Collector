@@ -1,0 +1,10 @@
+webui/.venv/
+webui/data/
+data/
+.run/
+recorder/build/
+*.pcap
+*.bag
+*.mcap
+__pycache__/
+*.pyc

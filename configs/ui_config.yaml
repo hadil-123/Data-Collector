@@ -1,0 +1,16 @@
+session_data_root: data/
+default_bg_radius: 0.08
+log_level: INFO
+
+# Configuration UI
+session_max_duration_s: 3600
+session_data_root: data/
+default_bg_radius: 0.08
+log_level: INFO
+
+
+session_max_duration_s: 3600
+session_data_root: data/
+default_bg_radius: 0.08
+log_level: INFO
+

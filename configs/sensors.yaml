@@ -1,0 +1,7 @@
+# Capteurs LiDAR
+sensor_a:
+  ip: 192.168.1.202
+sensor_b:
+  ip: 192.168.1.201
+port: 2368
+interface: enx3c18a0c1f237  # Interface 192.168.1.x (LiDAR)
