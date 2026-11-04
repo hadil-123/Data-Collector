@@ -10,14 +10,13 @@ import imageio_ffmpeg
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # webui/
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 SCENARIOS_PATH = os.path.join(PROJECT_ROOT, 'configs', 'scenarios.yaml')
-PLAYER_SCRIPT = os.path.join(PROJECT_ROOT, 'scripts', 'play_pcd_sequence.py')
+PLAYER_SCRIPT = os.path.join(PROJECT_ROOT, 'lidar_collector', 'playback', 'play_pcd_sequence.py')
 VELOVIEW_SCRIPT = os.path.join(PROJECT_ROOT, 'scripts', 'open_scenario_veloview.py')
 VIDEO_FPS = 10  # correspond au taux natif du capteur (10 Hz) pour une duree video realiste
 FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
 
-sys.path.insert(0, os.path.join(PROJECT_ROOT, 'scripts'))
 sys.path.insert(0, BASE_DIR)
-import pcap_to_pcd  # noqa: E402 - needs sys.path set up first
+from lidar_collector.capture import pcap_to_pcd
 import viz_helpers as vh  # noqa: E402 - needs sys.path set up first
 
 st.set_page_config(page_title="Visualisation des scenarios", page_icon="🎥", layout="wide")

@@ -9,4 +9,9 @@ description = "Capture, synchronisation et visualisation LiDAR double capteur (D
 requires-python = ">=3.10"
 
 [tool.setuptools]
-packages = ["lidar_collector", "lidar_collector.pcd"]
+packages = [
+    "lidar_collector",
+    "lidar_collector.pcd",
+    "lidar_collector.capture",
+    "lidar_collector.playback",
+]

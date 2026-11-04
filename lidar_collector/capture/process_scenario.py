@@ -17,11 +17,9 @@ Usage (single-sensor, no --pcap_b): just extracts lidar_A, no sync step.
 """
 import argparse
 import os
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import pcap_to_pcd
-import sync_scenario_frames
+from lidar_collector.capture import pcap_to_pcd
+from lidar_collector.capture import sync_scenario_frames
 
 
 def main():

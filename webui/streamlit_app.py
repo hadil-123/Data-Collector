@@ -18,8 +18,7 @@ DEMO_MODE = False
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)  # Up one level from webui/
 
-sys.path.insert(0, os.path.join(PROJECT_ROOT, 'scripts'))
-import pcap_to_pcd  # noqa: E402 - needs sys.path set up first
+from lidar_collector.capture import pcap_to_pcd
 CONFIG_PATH = os.path.join(PROJECT_ROOT, 'configs', 'ui_config.yaml')
 SENSORS_PATH = os.path.join(PROJECT_ROOT, 'configs', 'sensors.yaml')
 SCENARIOS_PATH = os.path.join(PROJECT_ROOT, 'configs', 'scenarios.yaml')
@@ -1035,7 +1034,7 @@ if session_active:
                     out_dir_a = os.path.join(base, 'derived', 'lidar_A', 'pcd')
                     log_path = os.path.join(base, 'logs', 'process_scenario.log')
 
-                    cmd = [sys.executable, os.path.join(PROJECT_ROOT, 'scripts', 'process_scenario.py'),
+                    cmd = [sys.executable, os.path.join(PROJECT_ROOT, 'lidar_collector', 'capture', 'process_scenario.py'),
                            '--scenario_id', scenario_id,
                            '--pcap_a', pcap_a, '--out_dir_a', out_dir_a,
                            '--start_ns_a', str(start_ns_a), '--end_ns_a', str(end_ns_a)]
