@@ -17,6 +17,10 @@ sudo apt install -y build-essential cmake python3 python3-venv python3-pip
 - Launch ROS2 dual lidar: `ros2/dual_velodyne_vlp32c.launch.py`
 - Scripts start/stop stack complete: `scripts/start_ros_ui.sh`, `scripts/stop_ros_ui.sh`
 
+Pour l'architecture complète (rôle exact de chaque fichier, flux de
+données d'une session, historique du refactor) : voir
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## 1) Compiler le recorder C++
 
 Depuis la racine du projet:
