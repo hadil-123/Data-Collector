@@ -19,8 +19,9 @@ import csv
 import os
 
 import dpkt
-import numpy as np
 import velodyne_decoder as vd
+
+from lidar_collector.pcd import write_pcd_binary as _write_pcd_binary
 
 # Column order of the plain float array returned by vd.read_pcap(as_pcl_structs=False),
 # per velodyne_decoder.PointField.
@@ -28,23 +29,7 @@ FIELDS = ("x", "y", "z", "intensity", "time", "column", "ring", "return_type")
 
 
 def write_pcd_binary(path, points):
-    n = points.shape[0]
-    header = (
-        "# .PCD v0.7 - Point Cloud Data file format\n"
-        "VERSION 0.7\n"
-        f"FIELDS {' '.join(FIELDS)}\n"
-        f"SIZE {' '.join(['4'] * len(FIELDS))}\n"
-        f"TYPE {' '.join(['F'] * len(FIELDS))}\n"
-        f"COUNT {' '.join(['1'] * len(FIELDS))}\n"
-        f"WIDTH {n}\n"
-        "HEIGHT 1\n"
-        "VIEWPOINT 0 0 0 1 0 0 0\n"
-        f"POINTS {n}\n"
-        "DATA binary\n"
-    )
-    with open(path, "wb") as f:
-        f.write(header.encode("ascii"))
-        f.write(np.ascontiguousarray(points, dtype="<f4").tobytes())
+    _write_pcd_binary(path, points, FIELDS)
 
 
 def load_scenario_intervals(scenario_csv):

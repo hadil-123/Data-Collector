@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lidar-collector"
+version = "0.1.0"
+description = "Capture, synchronisation et visualisation LiDAR double capteur (DOMUS)"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+packages = ["lidar_collector", "lidar_collector.pcd"]

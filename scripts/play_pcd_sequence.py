@@ -38,42 +38,12 @@ import time
 import numpy as np
 import pyvista as pv
 
-_DTYPE_MAP = {("F", 4): "<f4", ("U", 2): "<u2", ("U", 4): "<u4", ("I", 4): "<i4"}
-
-
-def read_pcd_binary(path):
-    with open(path, "rb") as f:
-        fields = sizes = types = counts = n_points = None
-        while True:
-            line = f.readline().decode("ascii").strip()
-            if line.startswith("FIELDS"):
-                fields = line.split()[1:]
-            elif line.startswith("SIZE"):
-                sizes = [int(x) for x in line.split()[1:]]
-            elif line.startswith("TYPE"):
-                types = line.split()[1:]
-            elif line.startswith("COUNT"):
-                counts = [int(x) for x in line.split()[1:]]
-            elif line.startswith("POINTS"):
-                n_points = int(line.split()[1])
-            elif line.startswith("DATA"):
-                break
-        data = f.read()
-
-    dt_fields = []
-    for name, size, typ, count in zip(fields, sizes, types, counts):
-        np_type = _DTYPE_MAP[(typ, size)]
-        for c in range(count):
-            dt_fields.append((name if count == 1 else f"{name}_{c}", np_type))
-    return np.frombuffer(data, dtype=np.dtype(dt_fields), count=n_points)
+from lidar_collector.pcd import read_pcd_binary, invert_ceiling_mount_z
 
 
 def _swap_frame(plotter, path, color_by, actor, camera_set):
     arr = read_pcd_binary(path)
-    # Les deux capteurs sont montes inverses (au plafond, tete en bas) : leur
-    # axe Z brut pointe vers le bas reel. On l'inverse pour que "haut" dans
-    # le nuage de points corresponde au vrai haut de la piece.
-    xyz = np.column_stack([arr["x"], arr["y"], -arr["z"]]).astype(np.float32)
+    xyz = np.column_stack([arr["x"], arr["y"], invert_ceiling_mount_z(arr["z"])]).astype(np.float32)
 
     if actor is not None:
         plotter.remove_actor(actor, render=False)
@@ -115,7 +85,7 @@ def estimate_sequence_bounds(files, sample=30, pad_ratio=0.1):
             continue
         xs.append(arr["x"])
         ys.append(arr["y"])
-        zs.append(-arr["z"])  # meme inversion que _swap_frame (capteurs montes tete en bas)
+        zs.append(invert_ceiling_mount_z(arr["z"]))
     if not xs:
         return None
     xs, ys, zs = np.concatenate(xs), np.concatenate(ys), np.concatenate(zs)

@@ -11,6 +11,7 @@ recorder/build_test/
 *.mcap
 __pycache__/
 *.pyc
+*.egg-info/
 .vscode/
 guide_participant.pdf
 

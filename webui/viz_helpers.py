@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 
 import numpy as np
 
+from lidar_collector.pcd import read_pcd_binary, invert_ceiling_mount_z
+
 
 def load_sync_pairs(session_base, scenario_id):
     sync_path = os.path.join(session_base, 'derived', f'sync_{scenario_id}.csv')
@@ -19,35 +21,6 @@ def load_sync_pairs(session_base, scenario_id):
         return []
     with open(sync_path, newline='') as f:
         return list(csv.DictReader(f))
-
-_PCD_DTYPE_MAP = {("F", 4): "<f4", ("U", 2): "<u2", ("U", 4): "<u4", ("I", 4): "<i4"}
-
-
-def read_pcd_binary(path):
-    with open(path, "rb") as f:
-        fields = sizes = types = counts = n_points = None
-        while True:
-            line = f.readline().decode("ascii").strip()
-            if line.startswith("FIELDS"):
-                fields = line.split()[1:]
-            elif line.startswith("SIZE"):
-                sizes = [int(x) for x in line.split()[1:]]
-            elif line.startswith("TYPE"):
-                types = line.split()[1:]
-            elif line.startswith("COUNT"):
-                counts = [int(x) for x in line.split()[1:]]
-            elif line.startswith("POINTS"):
-                n_points = int(line.split()[1])
-            elif line.startswith("DATA"):
-                break
-        data = f.read()
-
-    dt_fields = []
-    for name, size, typ, count in zip(fields, sizes, types, counts):
-        np_type = _PCD_DTYPE_MAP[(typ, size)]
-        for c in range(count):
-            dt_fields.append((name if count == 1 else f"{name}_{c}", np_type))
-    return np.frombuffer(data, dtype=np.dtype(dt_fields), count=n_points)
 
 
 def frame_arrays(path, max_points):
@@ -59,11 +32,8 @@ def frame_arrays(path, max_points):
     idx = np.arange(n)
     if n > max_points:
         idx = np.random.default_rng(0).choice(n, max_points, replace=False)
-    # Les deux capteurs sont montes inverses (au plafond, tete en bas) :
-    # leur axe Z brut pointe donc vers le bas reel. On l'inverse ici pour
-    # que "haut" dans le nuage de points corresponde au vrai haut de la piece.
     return (arr["x"][idx].astype("<f4"), arr["y"][idx].astype("<f4"),
-            (-arr["z"][idx]).astype("<f4"), arr["intensity"][idx].astype("<f4"))
+            invert_ceiling_mount_z(arr["z"][idx]).astype("<f4"), arr["intensity"][idx].astype("<f4"))
 
 
 def b64f32(chunks):
