@@ -193,8 +193,9 @@ else:
                 st.rerun()
 
 st.divider()
-st.caption("Alternative : ouvrir le pcap complet de cette prise dans VeloView (lecture temps réel, les deux capteurs) :")
+veloview_scope = "les deux capteurs" if has_sensor_b else "le capteur A"
+st.caption(f"Alternative : ouvrir le pcap complet de cette prise dans VeloView (lecture temps réel, {veloview_scope}) :")
 if st.button("🛰️ Ouvrir en direct dans VeloView (fenêtres séparées)"):
     subprocess.Popen([sys.executable, VELOVIEW_SCRIPT, "--session", session_base,
                        "--scenario_id", scenario_id, "--take", str(take_idx + 1)])
-    st.success("VeloView lancé pour les deux capteurs (deux fenêtres vont s'ouvrir).")
+    st.success(f"VeloView lancé pour {veloview_scope} ({'deux fenêtres vont' if has_sensor_b else 'une fenêtre va'} s'ouvrir).")

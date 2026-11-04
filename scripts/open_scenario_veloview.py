@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Open one scenario's lidar_A and lidar_B .pcap in two VeloView windows at
-the same time, already loaded with the right calibration (no need to go
+"""Open one scenario's lidar_A (and lidar_B, if that pcap exists) .pcap in
+VeloView window(s), already loaded with the right calibration (no need to go
 through File > Open PCAP File manually for each one).
 
 Technique: VeloView's own `--script`/`--state` startup hooks run before its
@@ -93,15 +93,21 @@ def main():
     pcap_a = os.path.join(args.session, "derived", "lidar_A", "pcap", f"{pcap_name}.pcap")
     pcap_b = os.path.join(args.session, "derived", "lidar_B", "pcap", f"{pcap_name}.pcap")
 
-    missing = [p for p in (pcap_a, pcap_b) if not os.path.isfile(p)]
-    if missing:
-        for p in missing:
-            print(f"[open_scenario_veloview] introuvable: {p}")
+    if not os.path.isfile(pcap_a):
+        print(f"[open_scenario_veloview] introuvable: {pcap_a}")
         raise SystemExit(1)
+
+    # lidar_B est optionnel: une session mono-capteur n'a pas de pcap B pour
+    # ce scenario — on ouvre alors seulement le capteur A au lieu d'echouer.
+    sensors = [("A", pcap_a)]
+    if os.path.isfile(pcap_b):
+        sensors.append(("B", pcap_b))
+    else:
+        print(f"[open_scenario_veloview] pas de capteur B pour cette prise ({pcap_b} introuvable) — ouverture du capteur A seul")
 
     procs = []
     tmp_scripts = []
-    for label, pcap in (("A", pcap_a), ("B", pcap_b)):
+    for label, pcap in sensors:
         script_text = STARTUP_SCRIPT_TEMPLATE.format(pcap=pcap, calib=args.calibration)
         fd, tmp_path = tempfile.mkstemp(suffix=f"_open_{label}.py", prefix="veloview_")
         with os.fdopen(fd, "w") as f:
@@ -110,7 +116,8 @@ def main():
         print(f"[open_scenario_veloview] Capteur {label}: {pcap}")
         procs.append(subprocess.Popen([args.veloview_bin, f"--script={tmp_path}"]))
 
-    print("[open_scenario_veloview] fermez les deux fenetres VeloView pour terminer")
+    window_word = "la fenetre" if len(procs) == 1 else "les fenetres"
+    print(f"[open_scenario_veloview] fermez {window_word} VeloView pour terminer")
     for proc in procs:
         proc.wait()
     for tmp_path in tmp_scripts:
