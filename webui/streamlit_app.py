@@ -7,9 +7,6 @@ import csv
 from datetime import datetime
 import time
 
-# DEMO MODE - pour tester sans capteur réel
-DEMO_MODE = False
-
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)  # Up one level from webui/
@@ -190,9 +187,6 @@ if 'auto_refresh_live' not in st.session_state:
 
 st.title("🔴 Lidar Session Manager")
 
-if DEMO_MODE:
-    st.warning("🎭 **DEMO MODE ACTIVÉ** - Les données ne sont pas enregistrées réellement. Pour tester l'interface complète.")
-
 # ========== SIDEBAR ==========
 with st.sidebar:
     free_b, total_b = get_disk_free(UI_CFG['session_data_root'])
@@ -209,6 +203,18 @@ with st.sidebar:
     st.header("Configuration")
     ros_mode_available = detect_rosbag_mode()
     data_root = st.text_input("Data Root Dir:", UI_CFG['session_data_root'])
+    data_root_resolved = os.path.abspath(data_root)
+    if os.path.basename(os.path.normpath(data_root)) == data_root.strip():
+        # Un champ vide, ou une simple etiquette sans separateur de chemin
+        # (ex: "Hadill" tape par erreur a la place de "data/"), cree un
+        # nouveau dossier a cote de l'appli plutot que sous data/ -- c'est
+        # ainsi que des sessions reelles se sont deja retrouvees eparpillees
+        # directement sous webui/. On l'autorise quand meme (un sous-dossier
+        # peut etre voulu), mais on previent avant que la session ne demarre.
+        st.warning(f"⚠️ Chemin inhabituel, les données seront écrites dans `{data_root_resolved}`. "
+                   f"Vérifiez que c'est voulu (le défaut est `{UI_CFG['session_data_root']}`).")
+    else:
+        st.caption(f"📁 Les données seront écrites dans : `{data_root_resolved}`")
     sensor_a_ip = st.text_input("Sensor A IP:", SENSORS_CFG['sensor_a']['ip'])
     use_sensor_b = False
     sensor_b_ip = ""
@@ -386,29 +392,136 @@ with col1:
             with open(os.path.join(base, 'meta', 'session_meta.yaml'), 'w') as f:
                 yaml.dump(meta, f)
             
-            if DEMO_MODE:
-                # Mode démo - crée un processus fictif
-                import time
-                class DummyProc:
-                    def __init__(self):
-                        self.pid = 9999
-                    def terminate(self):
-                        pass
-                    def wait(self, timeout=None):
-                        pass
-                st.session_state.recorder_proc = DummyProc()
+            # Mode réel - lance le recorder
+            rec_bin = resolve_recorder_binary()
+            if rec_bin is None:
+                st.error("❌ Recorder introuvable. Build attendu dans `recorder/recorder` ou `recorder/build/recorder`.")
+                st.stop()
+            out_dir = os.path.join(base, 'raw', 'pcap')
+            rosbag_dir = os.path.join(base, 'raw', 'rosbag')
+            pcap_a = 'lidar_A.pcap'
+            cmd = [rec_bin, 'record', '--out_dir', out_dir, '--pcap_a', pcap_a,
+                   '--port', str(st.session_state.port),
+                   '--ip_a', st.session_state.sensor_a_ip,
+                   '--timestamp_source', 'kernel']
+            if st.session_state.enable_bag:
+                bag_dir = os.path.join(base, 'raw', 'bag')
+                cmd.extend(['--bag_dir', bag_dir, '--bag_a', 'lidar_A.bag', '--enable_bag'])
+            iface = str(SENSORS_CFG.get('interface', '')).strip()
+            if iface:
+                cmd.extend(['--interface', iface])
+            if use_sensor_b_this_session and st.session_state.sensor_b_ip:
+                cmd.extend(['--ip_b', st.session_state.sensor_b_ip, '--pcap_b', 'lidar_B.pcap'])
+                if st.session_state.enable_bag:
+                    cmd.extend(['--bag_b', 'lidar_B.bag'])
+            
+            try:
+                recorder_log_path = os.path.join(base, 'logs', 'recorder.log')
+                st.session_state.recorder_log_path = recorder_log_path
+                st.session_state.recorder_start_epoch_ns = now_epoch_ns()
+                with open(recorder_log_path, 'ab') as recorder_log_file:
+                    st.session_state.recorder_proc = subprocess.Popen(
+                        cmd,
+                        stdout=recorder_log_file,
+                        stderr=recorder_log_file,
+                        preexec_fn=os.setsid
+                    )
+                update_session_meta(
+                    base,
+                    {
+                        'recorder_start_epoch_ns': st.session_state.recorder_start_epoch_ns,
+                        'timeline_reference': 'ros' if rosbag_enabled_this_session else 'system',
+                    },
+                )
                 st.session_state.rosbag_proc_a = None
                 st.session_state.rosbag_proc_b = None
+                st.session_state.session_rosbag_mode = None
+                st.session_state.session_rosbag_output_a = None
+                st.session_state.session_rosbag_output_b = None
+                st.session_state.rosbag_log_path_a = None
+                st.session_state.rosbag_log_path_b = None
+                st.session_state.ros_prereq_log_path = None
                 st.session_state.roscore_proc = None
                 st.session_state.ros_driver_a_proc = None
                 st.session_state.ros_driver_b_proc = None
-                st.session_state.session_rosbag_mode = rosbag_mode
-                st.session_state.session_rosbag_output_a = None
-                st.session_state.session_rosbag_output_b = None
-                st.session_state.rosbag_log_path_a = os.path.join(base, 'logs', 'rosbag_record_a.log') if rosbag_enabled_this_session else None
-                st.session_state.rosbag_log_path_b = os.path.join(base, 'logs', 'rosbag_record_b.log') if rosbag_enabled_this_session and use_sensor_b_this_session else None
-                st.session_state.recorder_log_path = os.path.join(base, 'logs', 'recorder.log')
-                st.session_state.ros_prereq_log_path = os.path.join(base, 'logs', 'ros_prereq.log') if rosbag_enabled_this_session and ros_autolaunch_this_session else None
+
+                if rosbag_enabled_this_session and ros_autolaunch_this_session:
+                    prereq_log_path = os.path.join(base, 'logs', 'ros_prereq.log')
+                    st.session_state.ros_prereq_log_path = prereq_log_path
+                    if rosbag_mode == "ros1":
+                        st.session_state.roscore_proc = launch_bg_command(st.session_state.roscore_cmd, prereq_log_path)
+                        time.sleep(1.0)
+                    st.session_state.ros_driver_a_proc = launch_bg_command(st.session_state.ros_driver_a_cmd, prereq_log_path)
+                    if use_sensor_b_this_session and st.session_state.ros_driver_b_cmd.strip():
+                        st.session_state.ros_driver_b_proc = launch_bg_command(st.session_state.ros_driver_b_cmd, prereq_log_path)
+                    time.sleep(2.0)
+
+                if rosbag_enabled_this_session:
+                    preflight_ok, preflight_msg = preflight_ros(rosbag_mode, rosbag_topics_this_session)
+                    if not preflight_ok:
+                        raise RuntimeError(f"Pré-vol RosBag échoué: {preflight_msg}")
+
+                if rosbag_enabled_this_session:
+                    rosbag_cmd_a, rosbag_output_a = build_rosbag_command(
+                        rosbag_mode, rosbag_dir, "A", st.session_state.rosbag_topic_a.strip()
+                    )
+                    rosbag_log_path_a = os.path.join(base, 'logs', 'rosbag_record_a.log')
+                    st.session_state.rosbag_start_epoch_ns_a = now_epoch_ns()
+                    with open(rosbag_log_path_a, 'ab') as rosbag_log_file_a:
+                        st.session_state.rosbag_proc_a = subprocess.Popen(
+                            rosbag_cmd_a,
+                            stdout=rosbag_log_file_a,
+                            stderr=rosbag_log_file_a,
+                            preexec_fn=os.setsid
+                        )
+                    st.session_state.session_rosbag_output_a = rosbag_output_a
+                    st.session_state.rosbag_log_path_a = rosbag_log_path_a
+
+                    if use_sensor_b_this_session:
+                        rosbag_cmd_b, rosbag_output_b = build_rosbag_command(
+                            rosbag_mode, rosbag_dir, "B", st.session_state.rosbag_topic_b.strip()
+                        )
+                        rosbag_log_path_b = os.path.join(base, 'logs', 'rosbag_record_b.log')
+                        st.session_state.rosbag_start_epoch_ns_b = now_epoch_ns()
+                        with open(rosbag_log_path_b, 'ab') as rosbag_log_file_b:
+                            st.session_state.rosbag_proc_b = subprocess.Popen(
+                                rosbag_cmd_b,
+                                stdout=rosbag_log_file_b,
+                                stderr=rosbag_log_file_b,
+                                preexec_fn=os.setsid
+                            )
+                        st.session_state.session_rosbag_output_b = rosbag_output_b
+                        st.session_state.rosbag_log_path_b = rosbag_log_path_b
+
+                    time.sleep(1.0)
+                    if st.session_state.rosbag_proc_a and st.session_state.rosbag_proc_a.poll() is not None:
+                        raise RuntimeError(
+                            f"RosBag A ended early. Check log: {rosbag_log_path_a}"
+                        )
+                    if st.session_state.rosbag_proc_b and st.session_state.rosbag_proc_b.poll() is not None:
+                        raise RuntimeError(
+                            f"RosBag B ended early. Check log: {rosbag_log_path_b}"
+                        )
+                    st.session_state.session_rosbag_mode = rosbag_mode
+                    recorder_start = st.session_state.recorder_start_epoch_ns
+                    offset_a = None
+                    offset_b = None
+                    if recorder_start and st.session_state.rosbag_start_epoch_ns_a:
+                        offset_a = st.session_state.rosbag_start_epoch_ns_a - recorder_start
+                    if recorder_start and st.session_state.rosbag_start_epoch_ns_b:
+                        offset_b = st.session_state.rosbag_start_epoch_ns_b - recorder_start
+                    update_session_meta(
+                        base,
+                        {
+                            'timeline_reference': 'ros',
+                            'recorder_start_epoch_ns': recorder_start,
+                            'rosbag_start_epoch_ns_a': st.session_state.rosbag_start_epoch_ns_a,
+                            'rosbag_start_epoch_ns_b': st.session_state.rosbag_start_epoch_ns_b,
+                            'rosbag_offset_ns_a_from_recorder': offset_a,
+                            'rosbag_offset_ns_b_from_recorder': offset_b,
+                        },
+                    )
+
                 st.session_state.session_base = base
                 st.session_state.scenario_log_path = os.path.join(base, 'logs', 'session_log.csv')
                 st.session_state.lidar_a_log_path = os.path.join(base, 'logs', 'lidar_A_log.csv')
@@ -421,162 +534,17 @@ with col1:
                     use_sensor_b_this_session,
                 )
                 
-                st.success(f"✅ [DEMO MODE] Session started: {session_id}")
+                st.success(f"✅ Session started: {session_id}")
                 st.rerun()
-            else:
-                # Mode réel - lance le recorder
-                rec_bin = resolve_recorder_binary()
-                if rec_bin is None:
-                    st.error("❌ Recorder introuvable. Build attendu dans `recorder/recorder` ou `recorder/build/recorder`.")
-                    st.stop()
-                out_dir = os.path.join(base, 'raw', 'pcap')
-                rosbag_dir = os.path.join(base, 'raw', 'rosbag')
-                pcap_a = 'lidar_A.pcap'
-                cmd = [rec_bin, 'record', '--out_dir', out_dir, '--pcap_a', pcap_a,
-                       '--port', str(st.session_state.port),
-                       '--ip_a', st.session_state.sensor_a_ip,
-                       '--timestamp_source', 'kernel']
-                if st.session_state.enable_bag:
-                    bag_dir = os.path.join(base, 'raw', 'bag')
-                    cmd.extend(['--bag_dir', bag_dir, '--bag_a', 'lidar_A.bag', '--enable_bag'])
-                iface = str(SENSORS_CFG.get('interface', '')).strip()
-                if iface:
-                    cmd.extend(['--interface', iface])
-                if use_sensor_b_this_session and st.session_state.sensor_b_ip:
-                    cmd.extend(['--ip_b', st.session_state.sensor_b_ip, '--pcap_b', 'lidar_B.pcap'])
-                    if st.session_state.enable_bag:
-                        cmd.extend(['--bag_b', 'lidar_B.bag'])
-                
-                try:
-                    recorder_log_path = os.path.join(base, 'logs', 'recorder.log')
-                    st.session_state.recorder_log_path = recorder_log_path
-                    st.session_state.recorder_start_epoch_ns = now_epoch_ns()
-                    with open(recorder_log_path, 'ab') as recorder_log_file:
-                        st.session_state.recorder_proc = subprocess.Popen(
-                            cmd,
-                            stdout=recorder_log_file,
-                            stderr=recorder_log_file,
-                            preexec_fn=os.setsid
-                        )
-                    update_session_meta(
-                        base,
-                        {
-                            'recorder_start_epoch_ns': st.session_state.recorder_start_epoch_ns,
-                            'timeline_reference': 'ros' if rosbag_enabled_this_session else 'system',
-                        },
-                    )
-                    st.session_state.rosbag_proc_a = None
-                    st.session_state.rosbag_proc_b = None
-                    st.session_state.session_rosbag_mode = None
-                    st.session_state.session_rosbag_output_a = None
-                    st.session_state.session_rosbag_output_b = None
-                    st.session_state.rosbag_log_path_a = None
-                    st.session_state.rosbag_log_path_b = None
-                    st.session_state.ros_prereq_log_path = None
-                    st.session_state.roscore_proc = None
-                    st.session_state.ros_driver_a_proc = None
-                    st.session_state.ros_driver_b_proc = None
-
-                    if rosbag_enabled_this_session and ros_autolaunch_this_session:
-                        prereq_log_path = os.path.join(base, 'logs', 'ros_prereq.log')
-                        st.session_state.ros_prereq_log_path = prereq_log_path
-                        if rosbag_mode == "ros1":
-                            st.session_state.roscore_proc = launch_bg_command(st.session_state.roscore_cmd, prereq_log_path)
-                            time.sleep(1.0)
-                        st.session_state.ros_driver_a_proc = launch_bg_command(st.session_state.ros_driver_a_cmd, prereq_log_path)
-                        if use_sensor_b_this_session and st.session_state.ros_driver_b_cmd.strip():
-                            st.session_state.ros_driver_b_proc = launch_bg_command(st.session_state.ros_driver_b_cmd, prereq_log_path)
-                        time.sleep(2.0)
-
-                    if rosbag_enabled_this_session:
-                        preflight_ok, preflight_msg = preflight_ros(rosbag_mode, rosbag_topics_this_session)
-                        if not preflight_ok:
-                            raise RuntimeError(f"Pré-vol RosBag échoué: {preflight_msg}")
-
-                    if rosbag_enabled_this_session:
-                        rosbag_cmd_a, rosbag_output_a = build_rosbag_command(
-                            rosbag_mode, rosbag_dir, "A", st.session_state.rosbag_topic_a.strip()
-                        )
-                        rosbag_log_path_a = os.path.join(base, 'logs', 'rosbag_record_a.log')
-                        st.session_state.rosbag_start_epoch_ns_a = now_epoch_ns()
-                        with open(rosbag_log_path_a, 'ab') as rosbag_log_file_a:
-                            st.session_state.rosbag_proc_a = subprocess.Popen(
-                                rosbag_cmd_a,
-                                stdout=rosbag_log_file_a,
-                                stderr=rosbag_log_file_a,
-                                preexec_fn=os.setsid
-                            )
-                        st.session_state.session_rosbag_output_a = rosbag_output_a
-                        st.session_state.rosbag_log_path_a = rosbag_log_path_a
-
-                        if use_sensor_b_this_session:
-                            rosbag_cmd_b, rosbag_output_b = build_rosbag_command(
-                                rosbag_mode, rosbag_dir, "B", st.session_state.rosbag_topic_b.strip()
-                            )
-                            rosbag_log_path_b = os.path.join(base, 'logs', 'rosbag_record_b.log')
-                            st.session_state.rosbag_start_epoch_ns_b = now_epoch_ns()
-                            with open(rosbag_log_path_b, 'ab') as rosbag_log_file_b:
-                                st.session_state.rosbag_proc_b = subprocess.Popen(
-                                    rosbag_cmd_b,
-                                    stdout=rosbag_log_file_b,
-                                    stderr=rosbag_log_file_b,
-                                    preexec_fn=os.setsid
-                                )
-                            st.session_state.session_rosbag_output_b = rosbag_output_b
-                            st.session_state.rosbag_log_path_b = rosbag_log_path_b
-
-                        time.sleep(1.0)
-                        if st.session_state.rosbag_proc_a and st.session_state.rosbag_proc_a.poll() is not None:
-                            raise RuntimeError(
-                                f"RosBag A ended early. Check log: {rosbag_log_path_a}"
-                            )
-                        if st.session_state.rosbag_proc_b and st.session_state.rosbag_proc_b.poll() is not None:
-                            raise RuntimeError(
-                                f"RosBag B ended early. Check log: {rosbag_log_path_b}"
-                            )
-                        st.session_state.session_rosbag_mode = rosbag_mode
-                        recorder_start = st.session_state.recorder_start_epoch_ns
-                        offset_a = None
-                        offset_b = None
-                        if recorder_start and st.session_state.rosbag_start_epoch_ns_a:
-                            offset_a = st.session_state.rosbag_start_epoch_ns_a - recorder_start
-                        if recorder_start and st.session_state.rosbag_start_epoch_ns_b:
-                            offset_b = st.session_state.rosbag_start_epoch_ns_b - recorder_start
-                        update_session_meta(
-                            base,
-                            {
-                                'timeline_reference': 'ros',
-                                'recorder_start_epoch_ns': recorder_start,
-                                'rosbag_start_epoch_ns_a': st.session_state.rosbag_start_epoch_ns_a,
-                                'rosbag_start_epoch_ns_b': st.session_state.rosbag_start_epoch_ns_b,
-                                'rosbag_offset_ns_a_from_recorder': offset_a,
-                                'rosbag_offset_ns_b_from_recorder': offset_b,
-                            },
-                        )
-
-                    st.session_state.session_base = base
-                    st.session_state.scenario_log_path = os.path.join(base, 'logs', 'session_log.csv')
-                    st.session_state.lidar_a_log_path = os.path.join(base, 'logs', 'lidar_A_log.csv')
-                    st.session_state.lidar_b_log_path = os.path.join(base, 'logs', 'lidar_B_log.csv') if use_sensor_b_this_session else None
-                    initialize_session_logs(
-                        st.session_state.scenario_log_path,
-                        st.session_state.lidar_a_log_path,
-                        st.session_state.lidar_b_log_path,
-                        st.session_state.session_start_epoch_ns,
-                        use_sensor_b_this_session,
-                    )
-                    
-                    st.success(f"✅ Session started: {session_id}")
-                    st.rerun()
-                except Exception as e:
-                    stop_process_group(st.session_state.rosbag_proc_b)
-                    stop_process_group(st.session_state.rosbag_proc_a)
-                    stop_process_group(st.session_state.ros_driver_b_proc)
-                    stop_process_group(st.session_state.ros_driver_a_proc)
-                    stop_process_group(st.session_state.roscore_proc)
-                    stop_process_group(st.session_state.recorder_proc)
-                    reset_runtime_state(clear_session_context=False)
-                    st.error(f"❌ Failed to start: {e}")
+            except Exception as e:
+                stop_process_group(st.session_state.rosbag_proc_b)
+                stop_process_group(st.session_state.rosbag_proc_a)
+                stop_process_group(st.session_state.ros_driver_b_proc)
+                stop_process_group(st.session_state.ros_driver_a_proc)
+                stop_process_group(st.session_state.roscore_proc)
+                stop_process_group(st.session_state.recorder_proc)
+                reset_runtime_state(clear_session_context=False)
+                st.error(f"❌ Failed to start: {e}")
     else:
         if st.button("⏹️ Stop Session", use_container_width=True, key="btn_stop"):
             try:
