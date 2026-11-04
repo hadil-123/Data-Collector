@@ -253,12 +253,25 @@ def extract_clip(src_path, offset_s, duration_s, out_path, ffmpeg_bin):
 
 
 def find_sessions(base_dir):
-    import glob
-    pattern = os.path.join(base_dir, '*', 'S*_P*_*')
+    """Find session dirs (S<id>_P<id>_<timestamp>) anywhere under base_dir,
+    not just one level down — "Data Root Dir" is a free-text field (see
+    streamlit_app.py), so a session can land at base_dir/S.../ as well as
+    base_dir/data/some_label/S.../ depending on what was typed.
+
+    Walks with os.walk (not a recursive glob) so matched session dirs and
+    hidden dirs (.venv, .git, ...) get pruned instead of being scanned into —
+    a session's derived/ can hold thousands of small .pcd frame files, which
+    a recursive glob would have to stat on every call just to discard."""
+    import fnmatch
     sessions = []
-    for path in glob.glob(pattern):
-        if os.path.isdir(os.path.join(path, 'derived', 'lidar_A', 'pcd')):
-            sessions.append(path)
+    for root, dirs, _files in os.walk(base_dir):
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        matched = [d for d in dirs if fnmatch.fnmatch(d, 'S*_P*_*')]
+        for d in matched:
+            path = os.path.join(root, d)
+            if os.path.isdir(os.path.join(path, 'derived', 'lidar_A', 'pcd')):
+                sessions.append(path)
+        dirs[:] = [d for d in dirs if d not in matched]
     sessions.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     return sessions
 

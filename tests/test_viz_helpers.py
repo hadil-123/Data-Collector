@@ -120,6 +120,29 @@ def test_find_sessions_requires_lidar_a_pcd_dir(tmp_path):
     assert not any(str(incomplete) == s for s in sessions)
 
 
+def test_find_sessions_finds_sessions_nested_more_than_one_level_deep(tmp_path):
+    # "Data Root Dir" is free text (e.g. "data/Hadil" instead of just "data"),
+    # so a session can land more than one directory level under base_dir.
+    nested = tmp_path / "data" / "Hadil" / "S001_P01_20261104_174712"
+    (nested / "derived" / "lidar_A" / "pcd").mkdir(parents=True)
+
+    sessions = vh.find_sessions(str(tmp_path))
+    assert str(nested) in sessions
+
+
+def test_find_sessions_does_not_descend_into_matched_session_dirs(tmp_path):
+    # A scenario id inside a matched session's own pcd/ output could in
+    # theory look like a session name too (unlikely, but find_sessions
+    # should never need to look there) -- assert the walk is pruned.
+    valid = tmp_path / "S001_P01_20260101_000000"
+    (valid / "derived" / "lidar_A" / "pcd").mkdir(parents=True)
+    decoy = valid / "derived" / "lidar_A" / "pcd" / "S002_P01_decoy"
+    (decoy / "derived" / "lidar_A" / "pcd").mkdir(parents=True)
+
+    sessions = vh.find_sessions(str(tmp_path))
+    assert sessions == [str(valid)]
+
+
 # ---------------------------------------------------------------------------
 # load_sync_pairs
 # ---------------------------------------------------------------------------
