@@ -3,13 +3,9 @@ import subprocess
 import os
 import sys
 import yaml
-import shutil
-import signal
-import shlex
 import csv
 from datetime import datetime
 import time
-import re
 
 # DEMO MODE - pour tester sans capteur réel
 DEMO_MODE = False
@@ -19,6 +15,19 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)  # Up one level from webui/
 
 from lidar_collector.capture import pcap_to_pcd
+from lidar_collector.session.paths import (
+    resolve_recorder_binary as _resolve_recorder_binary,
+    now_epoch_ns, fmt_hms_from_ns, get_file_size, get_dir_size, human_bytes,
+    get_disk_free, count_pcap_packets, tail_lines, parse_recorder_counters,
+)
+from lidar_collector.session.recorder_control import (
+    detect_rosbag_mode, build_rosbag_command, preflight_ros,
+    launch_bg_command, stop_process_group,
+)
+from lidar_collector.session.scenario_log import (
+    update_session_meta, find_open_scenario, scenario_completion_counts,
+    initialize_session_logs,
+)
 CONFIG_PATH = os.path.join(PROJECT_ROOT, 'configs', 'ui_config.yaml')
 SENSORS_PATH = os.path.join(PROJECT_ROOT, 'configs', 'sensors.yaml')
 SCENARIOS_PATH = os.path.join(PROJECT_ROOT, 'configs', 'scenarios.yaml')
@@ -58,245 +67,7 @@ SENSOR_B_AVAILABLE = SENSORS_CFG['sensor_b']['available']
 
 
 def resolve_recorder_binary():
-    candidates = [
-        os.path.join(PROJECT_ROOT, 'recorder', 'recorder'),
-        os.path.join(PROJECT_ROOT, 'recorder', 'build', 'recorder'),
-    ]
-    for candidate in candidates:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return None
-
-
-def now_epoch_ns():
-    return time.time_ns()
-
-
-def fmt_hms_from_ns(epoch_ns):
-    return datetime.fromtimestamp(epoch_ns / 1e9).strftime('%H:%M:%S')
-
-
-def detect_rosbag_mode():
-    if shutil.which("ros2"):
-        return "ros2"
-    if shutil.which("rosbag"):
-        return "ros1"
-    return None
-
-
-def build_rosbag_command(mode, rosbag_dir, sensor_tag, topic):
-    if mode == "ros2":
-        output_base = os.path.join(rosbag_dir, f"lidar_{sensor_tag}_ros2")
-        return ["ros2", "bag", "record", "-o", output_base, topic], output_base
-    output_file = os.path.join(rosbag_dir, f"lidar_{sensor_tag}_ros1.bag")
-    return ["rosbag", "record", "-O", output_file, topic], output_file
-
-
-def run_check_command(cmd):
-    try:
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-        return res.returncode == 0, res.stdout.strip(), res.stderr.strip()
-    except Exception as e:
-        return False, "", str(e)
-
-
-def preflight_ros(mode, topics):
-    if mode == "ros2":
-        ok, out, err = run_check_command(["ros2", "topic", "list"])
-        if not ok:
-            return False, f"ROS2 indisponible: {err or 'commande ros2 topic list en erreur'}"
-        available = set([line.strip() for line in out.splitlines() if line.strip()])
-        missing = [t for t in topics if t not in available]
-        if missing:
-            return False, f"Topics ROS2 absents: {', '.join(missing)}"
-        return True, "Pre-vol ROS2 OK"
-
-    ok, out, err = run_check_command(["rostopic", "list"])
-    if not ok:
-        return False, f"ROS1/roscore indisponible: {err or 'commande rostopic list en erreur'}"
-    available = set([line.strip() for line in out.splitlines() if line.strip()])
-    missing = [t for t in topics if t not in available]
-    if missing:
-        return False, f"Topics ROS1 absents: {', '.join(missing)}"
-    return True, "Pre-vol ROS1 OK"
-
-
-def launch_bg_command(command_text, log_path):
-    cmd = shlex.split(command_text)
-    if not cmd:
-        raise RuntimeError("Commande vide")
-    with open(log_path, "ab") as log_file:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=log_file,
-            stderr=log_file,
-            preexec_fn=os.setsid
-        )
-    return proc
-
-
-def stop_process_group(proc):
-    if not proc:
-        return
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        proc.wait(timeout=5)
-    except Exception:
-        pass
-
-
-def update_session_meta(base_path, updates):
-    meta_path = os.path.join(base_path, 'meta', 'session_meta.yaml')
-    try:
-        current = {}
-        if os.path.exists(meta_path):
-            with open(meta_path, 'r') as f:
-                current = yaml.safe_load(f) or {}
-        current.update(updates)
-        with open(meta_path, 'w') as f:
-            yaml.dump(current, f)
-    except Exception:
-        pass
-
-
-def get_file_size(path):
-    try:
-        return os.path.getsize(path)
-    except OSError:
-        return 0
-
-
-def get_dir_size(path):
-    total = 0
-    if not path or not os.path.isdir(path):
-        return 0
-    for root, _, files in os.walk(path):
-        for name in files:
-            total += get_file_size(os.path.join(root, name))
-    return total
-
-
-def count_pcap_packets(path):
-    """Count complete packet records in a PCAP while it is being written."""
-    if not path or not os.path.exists(path):
-        return 0
-    try:
-        with open(path, "rb") as pcap_file:
-            header = pcap_file.read(24)
-            if len(header) < 24:
-                return 0
-            packet_count = 0
-            while True:
-                record_header = pcap_file.read(16)
-                if len(record_header) < 16:
-                    break
-                included_length = int.from_bytes(record_header[8:12], "little")
-                if len(pcap_file.read(included_length)) < included_length:
-                    break
-                packet_count += 1
-            return packet_count
-    except OSError:
-        return 0
-
-
-def human_bytes(num):
-    units = ["B", "KB", "MB", "GB", "TB"]
-    val = float(num)
-    for unit in units:
-        if val < 1024.0 or unit == units[-1]:
-            return f"{val:.1f} {unit}"
-        val /= 1024.0
-    return f"{num} B"
-
-
-def get_disk_free(path):
-    """(free_bytes, total_bytes) for the filesystem holding path, or (None, None)."""
-    try:
-        probe = path if os.path.isdir(path) else os.path.dirname(path) or "."
-        usage = shutil.disk_usage(probe)
-        return usage.free, usage.total
-    except OSError:
-        return None, None
-
-
-def find_open_scenario(log_path):
-    """Return (scenario_id, start_epoch_ns) for a scenario_start with no
-    matching scenario_end yet (i.e. currently in progress), or None."""
-    if not log_path or not os.path.exists(log_path):
-        return None
-    open_scenario = None
-    try:
-        with open(log_path, newline="") as f:
-            for row in csv.DictReader(f):
-                if row.get("event") == "scenario_start":
-                    open_scenario = (row.get("scenario_id"), row.get("epoch_ns"))
-                elif row.get("event") == "scenario_end" and open_scenario and row.get("scenario_id") == open_scenario[0]:
-                    open_scenario = None
-    except OSError:
-        return None
-    return open_scenario
-
-
-def scenario_completion_counts(log_path):
-    """{scenario_id: number of completed takes} this session, from scenario_end rows."""
-    counts = {}
-    if not log_path or not os.path.exists(log_path):
-        return counts
-    try:
-        with open(log_path, newline="") as f:
-            for row in csv.DictReader(f):
-                if row.get("event") == "scenario_end":
-                    sid = row.get("scenario_id")
-                    counts[sid] = counts.get(sid, 0) + 1
-    except OSError:
-        pass
-    return counts
-
-
-def tail_lines(path, n=8):
-    if not path or not os.path.exists(path):
-        return []
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        return [l.rstrip("\n") for l in lines[-n:]]
-    except OSError:
-        return []
-
-
-def parse_recorder_counters(log_path):
-    if not log_path or not os.path.exists(log_path):
-        return None
-    pattern = re.compile(r"pkts total=(\d+)\s+a=(\d+)\s+b=(\d+)\s+dropped_ip=(\d+)")
-    last = None
-    try:
-        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                m = pattern.search(line)
-                if m:
-                    last = {
-                        "total": int(m.group(1)),
-                        "a": int(m.group(2)),
-                        "b": int(m.group(3)),
-                        "dropped": int(m.group(4)),
-                    }
-    except OSError:
-        return None
-    return last
-
-
-def initialize_session_logs(scenario_log_path, lidar_a_log_path, lidar_b_log_path, start_epoch_ns, use_sensor_b):
-    with open(scenario_log_path, 'w') as f:
-        f.write("event,hh:mm:ss,elapsed_sec,epoch_ns,lidar_a_status,lidar_b_status\n")
-        lidar_b_status = "ok" if use_sensor_b else "disabled"
-        f.write(f"session_start,{fmt_hms_from_ns(start_epoch_ns)},0,{start_epoch_ns},ok,{lidar_b_status}\n")
-
-    with open(lidar_a_log_path, 'w') as f:
-        f.write("event,hh:mm:ss,elapsed_sec,epoch_ns,scenario_id,scenario_label,zone,num_people,occlusion,notes,status\n")
-
-    if lidar_b_log_path:
-        with open(lidar_b_log_path, 'w') as f:
-            f.write("event,hh:mm:ss,elapsed_sec,epoch_ns,scenario_id,scenario_label,zone,num_people,occlusion,notes,status\n")
+    return _resolve_recorder_binary(PROJECT_ROOT)
 
 
 def reset_runtime_state(clear_session_context=False):

@@ -14,4 +14,5 @@ packages = [
     "lidar_collector.pcd",
     "lidar_collector.capture",
     "lidar_collector.playback",
+    "lidar_collector.session",
 ]
