@@ -45,8 +45,17 @@ if [[ ! -f "$ROS_LAUNCH" ]]; then
   exit 1
 fi
 
+SENSOR_B_IP=""
+if [[ -f "$ROOT_DIR/configs/sensors.yaml" ]]; then
+  SENSOR_B_IP="$(python -c 'import yaml, sys; c=yaml.safe_load(open(sys.argv[1])) or {}; print((c.get("sensor_b") or {}).get("ip", ""))' "$ROOT_DIR/configs/sensors.yaml")"
+fi
+
 # Start dual lidar ROS2 stack
-nohup ros2 launch "$ROS_LAUNCH" > "$LOG_DIR/ros2_dual.log" 2>&1 &
+ROS_ARGS=()
+if [[ -n "$SENSOR_B_IP" ]]; then
+  ROS_ARGS+=("ip_b:=$SENSOR_B_IP")
+fi
+nohup ros2 launch "$ROS_LAUNCH" "${ROS_ARGS[@]}" > "$LOG_DIR/ros2_dual.log" 2>&1 &
 ROS_PID=$!
 sleep 2
 if ! kill -0 "$ROS_PID" 2>/dev/null; then

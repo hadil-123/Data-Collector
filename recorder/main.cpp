@@ -1,5 +1,7 @@
 #include "pcap_writer.h"
 #include "bag_writer.h"
+#include "args.h"
+#include "packet_parse.h"
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -20,46 +22,13 @@
 #include <memory>
 #include <cerrno>
 
-// Minimal CLI parsing for demonstration
-struct Args {
-    std::string out_dir;
-    std::string bag_dir;
-    std::string pcap_a_name;
-    std::string pcap_b_name;
-    std::string bag_a_name;
-    std::string bag_b_name;
-    int port = 2368;
-    std::string ip_a, ip_b;
-    std::string interface;
-    std::string timestamp_source = "kernel";
-};
-
-bool parseArgs(int argc, char** argv, Args& args) {
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--out_dir" && i+1 < argc) args.out_dir = argv[++i];
-        else if (arg == "--bag_dir" && i+1 < argc) args.bag_dir = argv[++i];
-        else if (arg == "--pcap" && i+1 < argc) args.pcap_a_name = argv[++i]; // backward-compatible alias
-        else if (arg == "--pcap_a" && i+1 < argc) args.pcap_a_name = argv[++i];
-        else if (arg == "--pcap_b" && i+1 < argc) args.pcap_b_name = argv[++i];
-        else if (arg == "--bag_a" && i+1 < argc) args.bag_a_name = argv[++i];
-        else if (arg == "--bag_b" && i+1 < argc) args.bag_b_name = argv[++i];
-        else if (arg == "--port" && i+1 < argc) args.port = std::stoi(argv[++i]);
-        else if (arg == "--ip_a" && i+1 < argc) args.ip_a = argv[++i];
-        else if (arg == "--ip_b" && i+1 < argc) args.ip_b = argv[++i];
-        else if (arg == "--interface" && i+1 < argc) args.interface = argv[++i];
-        else if (arg == "--timestamp_source" && i+1 < argc) args.timestamp_source = argv[++i];
-    }
-    return !args.out_dir.empty() && !args.pcap_a_name.empty() && !args.ip_a.empty();
-}
-
 int main(int argc, char** argv) {
     std::cout.setf(std::ios::unitbuf);
     std::cerr.setf(std::ios::unitbuf);
 
     Args args;
     if (!parseArgs(argc, argv, args)) {
-        std::cerr << "Usage: ./recorder record --out_dir DIR [--bag_dir DIR] --pcap_a FILE [--pcap_b FILE] [--bag_a FILE] [--bag_b FILE] --port 2368 --ip_a IP [--ip_b IP] [--interface IFACE] [--timestamp_source kernel|system]\n";
+        std::cerr << "Usage: ./recorder record --out_dir DIR [--bag_dir DIR] --pcap_a FILE [--pcap_b FILE] [--bag_a FILE] [--bag_b FILE] --port 2368 --ip_a IP [--ip_b IP] [--interface IFACE] [--timestamp_source kernel|system] [--enable_bag]\n";
         return 1;
     }
     if (args.bag_dir.empty()) {
@@ -77,16 +46,19 @@ int main(int argc, char** argv) {
     }
 
     std::string pcap_a_path = args.out_dir + "/" + args.pcap_a_name;
-    std::string bag_a_path = args.bag_dir + "/" + args.bag_a_name;
     PcapWriter writer_a(pcap_a_path);
-    BagWriter bag_writer_a(bag_a_path);
+    std::unique_ptr<BagWriter> bag_writer_a;
+    if (args.enable_bag) {
+        bag_writer_a = std::make_unique<BagWriter>(args.bag_dir + "/" + args.bag_a_name);
+    }
     std::unique_ptr<PcapWriter> writer_b;
     std::unique_ptr<BagWriter> bag_writer_b;
     if (has_sensor_b) {
         std::string pcap_b_path = args.out_dir + "/" + args.pcap_b_name;
-        std::string bag_b_path = args.bag_dir + "/" + args.bag_b_name;
         writer_b = std::make_unique<PcapWriter>(pcap_b_path);
-        bag_writer_b = std::make_unique<BagWriter>(bag_b_path);
+        if (args.enable_bag) {
+            bag_writer_b = std::make_unique<BagWriter>(args.bag_dir + "/" + args.bag_b_name);
+        }
     }
     
     uint64_t total_packets = 0;
@@ -129,7 +101,9 @@ int main(int argc, char** argv) {
             } else {
                 writer_a.writePacket(payload, ts_ns, src_ip, src_port, dst_port);
             }
-            bag_writer_a.writePacket(payload, ts_ns, src_ip, src_port, dst_port);
+            if (bag_writer_a) {
+                bag_writer_a->writePacket(payload, ts_ns, src_ip, src_port, dst_port);
+            }
             ++packets_a;
         } else if (has_sensor_b && src_ip == args.ip_b && writer_b) {
             if (raw_frame && raw_frame_len > 0) {
@@ -149,7 +123,7 @@ int main(int argc, char** argv) {
                           << (has_sensor_b ? (" B=" + args.ip_b) : "") << "\n";
             }
         }
-        if ((total_packets % 5000ULL) == 0ULL) {
+        if ((total_packets % 1000ULL) == 0ULL) {
             std::cerr << "[recorder] pkts total=" << total_packets
                       << " a=" << packets_a
                       << " b=" << packets_b
@@ -202,6 +176,17 @@ int main(int argc, char** argv) {
             perror("bind(AF_INET)");
             close(sockfd);
             return 1;
+        }
+    }
+
+    // Kernel default (net.core.rmem_default, often ~208KB) is too small to absorb
+    // receive bursts on a jittery link (e.g. Wi-Fi power-save wake cycles), causing
+    // silent packet drops below the application (invisible to dropped_ip). Request a
+    // larger buffer; the kernel silently caps this at net.core.rmem_max if exceeded.
+    {
+        int rcvbuf = 8 * 1024 * 1024;
+        if (setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) < 0) {
+            perror("setsockopt(SO_RCVBUF)");
         }
     }
 
@@ -263,33 +248,10 @@ int main(int argc, char** argv) {
         const int64_t ts_ns = extract_ts_ns(&msg);
 
         if (raw_packet_mode) {
-            if (len < 14) continue;
-            const uint8_t* frame = buf;
-            const uint16_t ether_type = static_cast<uint16_t>(frame[12] << 8 | frame[13]);
-            if (ether_type != 0x0800) continue; // IPv4 only
-            const size_t ip_offset = 14;
-            if (static_cast<size_t>(len) < ip_offset + 20) continue;
-            const uint8_t* ip = frame + ip_offset;
-            const uint8_t ip_ihl = static_cast<uint8_t>((ip[0] & 0x0F) * 4);
-            if (ip_ihl < 20) continue;
-            if (static_cast<size_t>(len) < ip_offset + ip_ihl + 8) continue;
-            if (ip[9] != IPPROTO_UDP) continue;
-            const uint8_t* udp = ip + ip_ihl;
-            const uint16_t src_port = ntohs(*reinterpret_cast<const uint16_t*>(udp));
-            const uint16_t dst_port = ntohs(*reinterpret_cast<const uint16_t*>(udp + 2));
-            if (dst_port != static_cast<uint16_t>(args.port)) continue;
-            const uint16_t udp_len = ntohs(*reinterpret_cast<const uint16_t*>(udp + 4));
-            if (udp_len < 8) continue;
-            size_t payload_len = static_cast<size_t>(udp_len - 8);
-            const size_t payload_max = static_cast<size_t>(len) - (ip_offset + ip_ihl + 8);
-            if (payload_len > payload_max) payload_len = payload_max;
-
-            char src_ip_buf[INET_ADDRSTRLEN]{};
-            inet_ntop(AF_INET, ip + 12, src_ip_buf, sizeof(src_ip_buf));
-            const std::string src_ip(src_ip_buf);
-            const uint8_t* payload_ptr = udp + 8;
-            std::vector<uint8_t> payload(payload_ptr, payload_ptr + payload_len);
-            handle_packet(payload, src_ip, src_port, dst_port, ts_ns, frame, static_cast<size_t>(len));
+            const auto parsed = parseRawEthernetUdp(buf, static_cast<size_t>(len), static_cast<uint16_t>(args.port));
+            if (!parsed) continue;
+            handle_packet(parsed->payload, parsed->src_ip, parsed->src_port, parsed->dst_port,
+                          ts_ns, buf, static_cast<size_t>(len));
         } else {
             sockaddr_in* udp_src = reinterpret_cast<sockaddr_in*>(&src_addr);
             const std::string src_ip = inet_ntoa(udp_src->sin_addr);

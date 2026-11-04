@@ -12,13 +12,24 @@ fi
 # shellcheck disable=SC1090
 source "$PID_FILE"
 
+kill_tree() {
+  local pid="$1"
+  local child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    kill_tree "$child"
+  done
+  kill "$pid" 2>/dev/null || true
+}
+
 kill_pid() {
   local name="$1"
   local pid="$2"
   if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
+    kill_tree "$pid"
     sleep 1
-    kill -9 "$pid" 2>/dev/null || true
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
     echo "Stopped $name (pid=$pid)"
   fi
 }

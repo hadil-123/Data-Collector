@@ -20,8 +20,7 @@ source webui/.venv/bin/activate
 pip install --upgrade pip
 pip install -r webui/requirements.txt
 cd webui
-streamlit run streamlit_app.py
-```
+c```
 
 Pour quitter l'environnement virtuel:
 

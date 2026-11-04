@@ -7,7 +7,9 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
+from launch.substitutions import PythonExpression
 from launch_ros.actions import Node
 
 
@@ -16,7 +18,7 @@ def _load_yaml(path):
         return yaml.safe_load(f)
 
 
-def _build_stack(namespace, device_ip_cfg, frame_id_cfg, calibration_cfg):
+def _build_stack(namespace, device_ip_cfg, frame_id_cfg, calibration_cfg, condition=None):
     driver_share = get_package_share_directory("velodyne_driver")
     driver_defaults = _load_yaml(
         os.path.join(driver_share, "config", "VLP32C-velodyne_driver_node-params.yaml")
@@ -54,6 +56,7 @@ def _build_stack(namespace, device_ip_cfg, frame_id_cfg, calibration_cfg):
             output="screen",
             parameters=[driver_params],
             remappings=remaps,
+            condition=condition,
         ),
         Node(
             package="velodyne_pointcloud",
@@ -63,6 +66,7 @@ def _build_stack(namespace, device_ip_cfg, frame_id_cfg, calibration_cfg):
             output="screen",
             parameters=[pointcloud_defaults],
             remappings=remaps,
+            condition=condition,
         ),
         Node(
             package="velodyne_laserscan",
@@ -72,6 +76,7 @@ def _build_stack(namespace, device_ip_cfg, frame_id_cfg, calibration_cfg):
             output="screen",
             parameters=[laserscan_defaults],
             remappings=remaps,
+            condition=condition,
         ),
     ]
 
@@ -90,7 +95,7 @@ def generate_launch_description():
     ld = LaunchDescription(
         [
             DeclareLaunchArgument("ip_a", default_value="192.168.1.202"),
-            DeclareLaunchArgument("ip_b", default_value="192.168.1.201"),
+            DeclareLaunchArgument("ip_b", default_value=""),
             DeclareLaunchArgument("frame_a", default_value="lidar_a"),
             DeclareLaunchArgument("frame_b", default_value="lidar_b"),
             DeclareLaunchArgument("calibration_a", default_value=default_calib),
@@ -100,7 +105,8 @@ def generate_launch_description():
 
     for node in _build_stack("lidar_a", ip_a, frame_a, calib_a):
         ld.add_action(node)
-    for node in _build_stack("lidar_b", ip_b, frame_b, calib_b):
+    sensor_b_condition = IfCondition(PythonExpression(["'", ip_b, "' != ''"]))
+    for node in _build_stack("lidar_b", ip_b, frame_b, calib_b, sensor_b_condition):
         ld.add_action(node)
 
     return ld

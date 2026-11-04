@@ -81,15 +81,47 @@ sudo apt install -y ros-jazzy-ros-base ros-jazzy-velodyne ros-jazzy-velodyne-dri
 
 ## 4) Config capteurs
 
-Edite `configs/sensors.yaml`:
+Pour un seul capteur, édite `configs/sensors.yaml` ainsi:
 
 ```yaml
 sensor_a:
   ip: 192.168.1.202
+port: 2368
+interface: wlp3s0
+```
+
+`interface` doit être l'interface réseau du PC qui appartient au même réseau
+que les LiDAR. Vérifie son nom avec:
+
+```bash
+ip -br addr
+```
+
+Dans le montage avec un routeur, le PC peut être connecté au routeur en Wi-Fi
+et les LiDAR au routeur en Ethernet. Le routeur doit fonctionner comme un
+réseau local commun, sans réseau invité ni isolation Wi-Fi entre clients.
+
+Dans la page de configuration du LiDAR (`http://192.168.1.202`), configure
+l'adresse de destination des données vers l'adresse Wi-Fi du PC:
+
+```text
+Destination/Host IP: 192.168.1.141
+Data port:           2368
+```
+
+Vérifie la connexion avant de démarrer la collecte:
+
+```bash
+ping -c 3 192.168.1.202
+sudo tcpdump -ni wlp3s0 udp port 2368
+```
+
+Pour réactiver un deuxième capteur, ajoute `sensor_b` dans le fichier et
+lance ROS2 avec son adresse:
+
+```yaml
 sensor_b:
   ip: 192.168.1.201
-port: 2368
-interface: enx3c18a0c1f237
 ```
 
 ## 5) Demarrage simplifie (1 commande)
@@ -100,9 +132,9 @@ Depuis la racine du projet:
 ./scripts/start_ros_ui.sh
 ```
 
-Ce script lance:
+Ce script lance le capteur configure dans `configs/sensors.yaml`:
 
-1. ROS2 dual lidar (`ros2/dual_velodyne_vlp32c.launch.py`)
+1. ROS2 Velodyne (`ros2/dual_velodyne_vlp32c.launch.py`, capteur B optionnel)
 2. RViz2 (si display GUI disponible)
 3. Streamlit (`http://localhost:8501`)
 
@@ -120,24 +152,23 @@ Logs runtime:
 
 ## 6) Enregistrer PCAP + RosBag depuis l'UI
 
-Dans l'UI (`http://localhost:8501`):
+Dans l'UI (`http://localhost:8501`), pour un seul capteur:
 
-1. Activer capteur B
-2. Cocher `Enregistrer RosBag auto (ROS1/ROS2)`
-3. Topics:
+1. Laisser le capteur A active
+2. Cocher `Enregistrer RosBag auto (ROS1/ROS2)` si un RosBag est necessaire
+3. Topic:
 
 ```text
 /lidar_a/velodyne_points
-/lidar_b/velodyne_points
 ```
 
 4. Cliquer `Start Session`, puis `Stop Session`
 
 Sorties session:
 
-- PCAP: `.../raw/pcap/lidar_A.pcap`, `.../raw/pcap/lidar_B.pcap`
-- RosBag2: `.../raw/rosbag/lidar_A_ros2/`, `.../raw/rosbag/lidar_B_ros2/`
-- Logs: `.../logs/recorder.log`, `.../logs/rosbag_record_a.log`, `.../logs/rosbag_record_b.log`
+- PCAP: `.../raw/pcap/lidar_A.pcap`
+- RosBag2: `.../raw/rosbag/lidar_A_ros2/`
+- Logs: `.../logs/recorder.log`, `.../logs/rosbag_record_a.log`
 
 ## 7) Lire un RosBag et l'afficher avec RViz
 
@@ -211,7 +242,7 @@ ls -lh data/<dossier_session>/raw/rosbag/lidar_B_ros2
 Le binaire recorder n'a pas les capacites raw apres un rebuild.
 
 ```bash
-cd ~/Bureau/lidar-dataset-collector-main
+cd ~/Bureau/lidar-dataset-collector-main-Final
 sudo setcap cap_net_raw,cap_net_admin+eip recorder/build/recorder
 getcap recorder/build/recorder
 ```

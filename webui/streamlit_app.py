@@ -1,10 +1,12 @@
 import streamlit as st
 import subprocess
 import os
+import sys
 import yaml
 import shutil
 import signal
 import shlex
+import csv
 from datetime import datetime
 import time
 import re
@@ -15,6 +17,9 @@ DEMO_MODE = False
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)  # Up one level from webui/
+
+sys.path.insert(0, os.path.join(PROJECT_ROOT, 'scripts'))
+import pcap_to_pcd  # noqa: E402 - needs sys.path set up first
 CONFIG_PATH = os.path.join(PROJECT_ROOT, 'configs', 'ui_config.yaml')
 SENSORS_PATH = os.path.join(PROJECT_ROOT, 'configs', 'sensors.yaml')
 SCENARIOS_PATH = os.path.join(PROJECT_ROOT, 'configs', 'scenarios.yaml')
@@ -172,6 +177,29 @@ def get_dir_size(path):
     return total
 
 
+def count_pcap_packets(path):
+    """Count complete packet records in a PCAP while it is being written."""
+    if not path or not os.path.exists(path):
+        return 0
+    try:
+        with open(path, "rb") as pcap_file:
+            header = pcap_file.read(24)
+            if len(header) < 24:
+                return 0
+            packet_count = 0
+            while True:
+                record_header = pcap_file.read(16)
+                if len(record_header) < 16:
+                    break
+                included_length = int.from_bytes(record_header[8:12], "little")
+                if len(pcap_file.read(included_length)) < included_length:
+                    break
+                packet_count += 1
+            return packet_count
+    except OSError:
+        return 0
+
+
 def human_bytes(num):
     units = ["B", "KB", "MB", "GB", "TB"]
     val = float(num)
@@ -180,6 +208,61 @@ def human_bytes(num):
             return f"{val:.1f} {unit}"
         val /= 1024.0
     return f"{num} B"
+
+
+def get_disk_free(path):
+    """(free_bytes, total_bytes) for the filesystem holding path, or (None, None)."""
+    try:
+        probe = path if os.path.isdir(path) else os.path.dirname(path) or "."
+        usage = shutil.disk_usage(probe)
+        return usage.free, usage.total
+    except OSError:
+        return None, None
+
+
+def find_open_scenario(log_path):
+    """Return (scenario_id, start_epoch_ns) for a scenario_start with no
+    matching scenario_end yet (i.e. currently in progress), or None."""
+    if not log_path or not os.path.exists(log_path):
+        return None
+    open_scenario = None
+    try:
+        with open(log_path, newline="") as f:
+            for row in csv.DictReader(f):
+                if row.get("event") == "scenario_start":
+                    open_scenario = (row.get("scenario_id"), row.get("epoch_ns"))
+                elif row.get("event") == "scenario_end" and open_scenario and row.get("scenario_id") == open_scenario[0]:
+                    open_scenario = None
+    except OSError:
+        return None
+    return open_scenario
+
+
+def scenario_completion_counts(log_path):
+    """{scenario_id: number of completed takes} this session, from scenario_end rows."""
+    counts = {}
+    if not log_path or not os.path.exists(log_path):
+        return counts
+    try:
+        with open(log_path, newline="") as f:
+            for row in csv.DictReader(f):
+                if row.get("event") == "scenario_end":
+                    sid = row.get("scenario_id")
+                    counts[sid] = counts.get(sid, 0) + 1
+    except OSError:
+        pass
+    return counts
+
+
+def tail_lines(path, n=8):
+    if not path or not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        return [l.rstrip("\n") for l in lines[-n:]]
+    except OSError:
+        return []
 
 
 def parse_recorder_counters(log_path):
@@ -210,11 +293,11 @@ def initialize_session_logs(scenario_log_path, lidar_a_log_path, lidar_b_log_pat
         f.write(f"session_start,{fmt_hms_from_ns(start_epoch_ns)},0,{start_epoch_ns},ok,{lidar_b_status}\n")
 
     with open(lidar_a_log_path, 'w') as f:
-        f.write("event,hh:mm:ss,elapsed_sec,epoch_ns,scenario_id,zone,num_people,occlusion,notes,status\n")
+        f.write("event,hh:mm:ss,elapsed_sec,epoch_ns,scenario_id,scenario_label,zone,num_people,occlusion,notes,status\n")
 
     if lidar_b_log_path:
         with open(lidar_b_log_path, 'w') as f:
-            f.write("event,hh:mm:ss,elapsed_sec,epoch_ns,scenario_id,zone,num_people,occlusion,notes,status\n")
+            f.write("event,hh:mm:ss,elapsed_sec,epoch_ns,scenario_id,scenario_label,zone,num_people,occlusion,notes,status\n")
 
 
 def reset_runtime_state(clear_session_context=False):
@@ -286,10 +369,16 @@ if 'rosbag_proc_b' not in st.session_state:
     st.session_state.rosbag_proc_b = None
 if 'enable_rosbag' not in st.session_state:
     st.session_state.enable_rosbag = False
+if 'enable_bag' not in st.session_state:
+    st.session_state.enable_bag = False
 if 'rosbag_topic_a' not in st.session_state:
-    st.session_state.rosbag_topic_a = "/lidar_a/points"
+    st.session_state.rosbag_topic_a = "/lidar_a/velodyne_points"
 if 'rosbag_topic_b' not in st.session_state:
-    st.session_state.rosbag_topic_b = "/lidar_b/points"
+    st.session_state.rosbag_topic_b = "/lidar_b/velodyne_points"
+if st.session_state.rosbag_topic_a == "/lidar_a/points":
+    st.session_state.rosbag_topic_a = "/lidar_a/velodyne_points"
+if st.session_state.rosbag_topic_b == "/lidar_b/points":
+    st.session_state.rosbag_topic_b = "/lidar_b/velodyne_points"
 if 'session_rosbag_mode' not in st.session_state:
     st.session_state.session_rosbag_mode = None
 if 'session_rosbag_output_a' not in st.session_state:
@@ -336,6 +425,17 @@ if DEMO_MODE:
 
 # ========== SIDEBAR ==========
 with st.sidebar:
+    free_b, total_b = get_disk_free(UI_CFG['session_data_root'])
+    if free_b is not None:
+        pct_free = 100.0 * free_b / total_b if total_b else 0
+        disk_msg = f"💾 Espace disque libre : {human_bytes(free_b)} ({pct_free:.0f}%)"
+        if pct_free < 10:
+            st.error(disk_msg + " — critique, libérez de la place avant d'enregistrer")
+        elif pct_free < 20:
+            st.warning(disk_msg)
+        else:
+            st.caption(disk_msg)
+
     st.header("Configuration")
     ros_mode_available = detect_rosbag_mode()
     data_root = st.text_input("Data Root Dir:", UI_CFG['session_data_root'])
@@ -356,6 +456,12 @@ with st.sidebar:
     else:
         st.caption("Mode 1 capteur: `sensor_b` absent de `configs/sensors.yaml`")
     port = st.number_input("UDP Port:", value=SENSORS_CFG['port'])
+    enable_bag = st.checkbox(
+        "Enregistrer aussi un .bag (recorder interne)",
+        value=st.session_state.enable_bag,
+        disabled=st.session_state.recorder_proc is not None,
+        help="Format .bag en plus du .pcap habituel — quasi la même taille, donc double l'espace disque utilisé. Désactivé par défaut.",
+    )
     enable_rosbag = st.checkbox(
         "Enregistrer RosBag auto (ROS1/ROS2)",
         value=st.session_state.enable_rosbag,
@@ -406,6 +512,7 @@ with st.sidebar:
     st.session_state.use_sensor_b = bool(use_sensor_b and SENSOR_B_AVAILABLE)
     st.session_state.sensor_b_ip = sensor_b_ip
     st.session_state.port = int(port)
+    st.session_state.enable_bag = bool(enable_bag)
     st.session_state.enable_rosbag = bool(enable_rosbag and ros_mode_available is not None)
     st.session_state.rosbag_topic_a = rosbag_topic_a
     st.session_state.rosbag_topic_b = rosbag_topic_b
@@ -427,8 +534,11 @@ with col1:
             st.session_state.recorder_start_epoch_ns = None
             st.session_state.rosbag_start_epoch_ns_a = None
             st.session_state.rosbag_start_epoch_ns_b = None
-            rosbag_enabled_this_session = bool(st.session_state.enable_rosbag)
-            ros_autolaunch_this_session = bool(st.session_state.enable_ros_autolaunch)
+
+            # Recorder-only mode for the main Start Session action.
+            # ROS bag / ROS autolaunch must be explicitly re-enabled in a separate flow.
+            rosbag_enabled_this_session = False
+            ros_autolaunch_this_session = False
             rosbag_topics_this_session = [st.session_state.rosbag_topic_a.strip()]
             if use_sensor_b_this_session:
                 rosbag_topics_this_session.append(st.session_state.rosbag_topic_b.strip())
@@ -456,7 +566,8 @@ with col1:
             base = os.path.join(st.session_state.data_root, session_id)
             
             os.makedirs(os.path.join(base, 'raw', 'pcap'), exist_ok=True)
-            os.makedirs(os.path.join(base, 'raw', 'bag'), exist_ok=True)
+            if st.session_state.enable_bag:
+                os.makedirs(os.path.join(base, 'raw', 'bag'), exist_ok=True)
             os.makedirs(os.path.join(base, 'raw', 'rosbag'), exist_ok=True)
             os.makedirs(os.path.join(base, 'meta'), exist_ok=True)
             os.makedirs(os.path.join(base, 'logs'), exist_ok=True)
@@ -476,8 +587,8 @@ with col1:
                 'sensor_b_enabled': use_sensor_b_this_session,
                 'raw_pcap_a': os.path.join('raw', 'pcap', 'lidar_A.pcap'),
                 'raw_pcap_b': os.path.join('raw', 'pcap', 'lidar_B.pcap') if use_sensor_b_this_session else None,
-                'raw_bag_a': os.path.join('raw', 'bag', 'lidar_A.bag'),
-                'raw_bag_b': os.path.join('raw', 'bag', 'lidar_B.bag') if use_sensor_b_this_session else None,
+                'raw_bag_a': os.path.join('raw', 'bag', 'lidar_A.bag') if st.session_state.enable_bag else None,
+                'raw_bag_b': os.path.join('raw', 'bag', 'lidar_B.bag') if st.session_state.enable_bag and use_sensor_b_this_session else None,
                 'rosbag_enabled': rosbag_enabled_this_session,
                 'rosbag_mode': rosbag_mode,
                 'rosbag_topics': rosbag_topics_this_session,
@@ -549,19 +660,22 @@ with col1:
                     st.error("❌ Recorder introuvable. Build attendu dans `recorder/recorder` ou `recorder/build/recorder`.")
                     st.stop()
                 out_dir = os.path.join(base, 'raw', 'pcap')
-                bag_dir = os.path.join(base, 'raw', 'bag')
                 rosbag_dir = os.path.join(base, 'raw', 'rosbag')
                 pcap_a = 'lidar_A.pcap'
                 cmd = [rec_bin, 'record', '--out_dir', out_dir, '--pcap_a', pcap_a,
-                       '--bag_dir', bag_dir, '--bag_a', 'lidar_A.bag',
                        '--port', str(st.session_state.port),
                        '--ip_a', st.session_state.sensor_a_ip,
                        '--timestamp_source', 'kernel']
+                if st.session_state.enable_bag:
+                    bag_dir = os.path.join(base, 'raw', 'bag')
+                    cmd.extend(['--bag_dir', bag_dir, '--bag_a', 'lidar_A.bag', '--enable_bag'])
                 iface = str(SENSORS_CFG.get('interface', '')).strip()
                 if iface:
                     cmd.extend(['--interface', iface])
                 if use_sensor_b_this_session and st.session_state.sensor_b_ip:
-                    cmd.extend(['--ip_b', st.session_state.sensor_b_ip, '--pcap_b', 'lidar_B.pcap', '--bag_b', 'lidar_B.bag'])
+                    cmd.extend(['--ip_b', st.session_state.sensor_b_ip, '--pcap_b', 'lidar_B.pcap'])
+                    if st.session_state.enable_bag:
+                        cmd.extend(['--bag_b', 'lidar_B.bag'])
                 
                 try:
                     recorder_log_path = os.path.join(base, 'logs', 'recorder.log')
@@ -756,17 +870,26 @@ with col2:
         pcap_b_path = os.path.join(base, "raw", "pcap", "lidar_B.pcap")
         rosbag_a_dir = os.path.join(base, "raw", "rosbag", "lidar_A_ros2")
         rosbag_b_dir = os.path.join(base, "raw", "rosbag", "lidar_B_ros2")
+        # Prefer the counters the recorder already computed and logged (cheap: a
+        # regex over a small text file) over count_pcap_packets, which re-parses
+        # every record of the raw pcap byte-by-byte in Python — fine for a small
+        # file, but a multi-GB pcap makes it slow enough to make the whole page
+        # feel heavy on every 2s auto-refresh. Only fall back to the full scan
+        # when the log-based counters aren't available yet (e.g. just started).
         counters = parse_recorder_counters(st.session_state.recorder_log_path)
 
-        packets_a = counters["a"] if counters else 0
-        packets_b = counters["b"] if counters else 0
+        if counters:
+            packets_a = counters["a"]
+            packets_b = counters["b"]
+        else:
+            packets_a = count_pcap_packets(pcap_a_path)
+            packets_b = count_pcap_packets(pcap_b_path)
         dropped_ip = counters["dropped"] if counters else 0
         now_ts = time.time()
         st.session_state.live_monitor_history.append(
             {"ts": now_ts, "a": packets_a, "b": packets_b}
         )
         st.session_state.live_monitor_history = st.session_state.live_monitor_history[-120:]
-
         col_a, col_b = st.columns(2)
         with col_a:
             st.markdown("**Capteur A**")
@@ -787,15 +910,16 @@ with col2:
             }
             st.line_chart(chart_data)
 
-        if st.session_state.auto_refresh_live:
-            time.sleep(2)
-            st.rerun()
-
 # ========== SCENARIOS ==========
 st.divider()
 st.subheader("Scénarios")
 
-if st.session_state.recorder_proc:
+session_active = bool(
+    st.session_state.recorder_proc is not None
+    or (st.session_state.session_base and os.path.isdir(st.session_state.session_base))
+)
+
+if session_active:
     # Build scenario options grouped by category
     scenario_dict = {s['id']: s for s in SCENARIOS_CFG['scenarios']}
     categories = {}
@@ -804,18 +928,41 @@ if st.session_state.recorder_proc:
         if cat not in categories:
             categories[cat] = []
         categories[cat].append(scenario)
-    
+
     # Create formatted options with category
     scenario_options = [("-- Sélectionner un scénario --", None)]  # Option vide par défaut
     for cat in sorted(categories.keys()):
         for s in categories[cat]:
             label = f"[{s['id']}] {s['label']} ({s.get('difficulty', 'N/A')})"
             scenario_options.append((label, s['id']))
-    
+
+    open_scenario = find_open_scenario(st.session_state.lidar_a_log_path)
+
+    completion_counts = scenario_completion_counts(st.session_state.lidar_a_log_path)
+    done_count = sum(1 for s in SCENARIOS_CFG['scenarios'] if completion_counts.get(s['id']))
+    with st.expander(f"📋 Scénarios complétés cette session ({done_count}/{len(SCENARIOS_CFG['scenarios'])})"):
+        for s in SCENARIOS_CFG['scenarios']:
+            n = completion_counts.get(s['id'], 0)
+            mark = "✅" if n else "⬜"
+            suffix = f" — {n} prise(s)" if n else ""
+            st.caption(f"{mark} [{s['id']}] {s['label']}{suffix}")
+
+    if open_scenario:
+        open_id, open_ts = open_scenario
+        open_label = next((lbl for lbl, sid in scenario_options if sid == open_id), open_id)
+        st.warning(f"🔴 Scénario en cours : **{open_label}** — démarré à {fmt_hms_from_ns(int(open_ts))}. "
+                   f"Cliquez Stop Scenario avant d'en choisir un autre.")
+        default_index = next((i for i, (_, sid) in enumerate(scenario_options) if sid == open_id), 0)
+    else:
+        default_index = 0
+
     scenario_display = [opt[0] for opt in scenario_options]
-    selected_scenario_label = st.selectbox("Choisir un scénario:", scenario_display, key="scenario_select")
+    selected_scenario_label = st.selectbox(
+        "Choisir un scénario:", scenario_display,
+        index=default_index, key="scenario_select", disabled=bool(open_scenario),
+    )
     scenario_id = [opt[1] for opt in scenario_options if opt[0] == selected_scenario_label][0]
-    
+
     # Only proceed if a scenario is selected
     if scenario_id:
         # Get scenario details
@@ -840,32 +987,101 @@ if st.session_state.recorder_proc:
         
         col_start, col_stop = st.columns(2)
         with col_start:
-            if st.button("▶️ Start Scenario", use_container_width=True, key="btn_start_scenario"):
-                with open(st.session_state.lidar_a_log_path, 'a') as f:
-                    epoch_ns = now_epoch_ns()
-                    elapsed = int((epoch_ns - st.session_state.session_start_epoch_ns) / 1_000_000_000)
-                    f.write(f"scenario_start,{fmt_hms_from_ns(epoch_ns)},{elapsed},{epoch_ns},{scenario_id},{zone},{num_people},{occlusion},{notes},ok\n")
+            if st.button("▶️ Start Scenario", use_container_width=True, key="btn_start_scenario",
+                         disabled=bool(open_scenario)):
+                scenario_label_full = selected_scenario_data['label']
+                epoch_ns_a = now_epoch_ns()
+                with open(st.session_state.lidar_a_log_path, 'a', newline='') as f:
+                    elapsed = int((epoch_ns_a - st.session_state.session_start_epoch_ns) / 1_000_000_000)
+                    csv.writer(f).writerow(["scenario_start", fmt_hms_from_ns(epoch_ns_a), elapsed, epoch_ns_a,
+                                             scenario_id, scenario_label_full, zone, num_people, occlusion, notes, "ok"])
                 if st.session_state.lidar_b_log_path:
-                    with open(st.session_state.lidar_b_log_path, 'a') as f:
-                        epoch_ns = now_epoch_ns()
-                        elapsed = int((epoch_ns - st.session_state.session_start_epoch_ns) / 1_000_000_000)
-                        f.write(f"scenario_start,{fmt_hms_from_ns(epoch_ns)},{elapsed},{epoch_ns},{scenario_id},{zone},{num_people},{occlusion},{notes},ok\n")
+                    epoch_ns_b = now_epoch_ns()
+                    with open(st.session_state.lidar_b_log_path, 'a', newline='') as f:
+                        elapsed = int((epoch_ns_b - st.session_state.session_start_epoch_ns) / 1_000_000_000)
+                        csv.writer(f).writerow(["scenario_start", fmt_hms_from_ns(epoch_ns_b), elapsed, epoch_ns_b,
+                                                 scenario_id, scenario_label_full, zone, num_people, occlusion, notes, "ok"])
                 st.success(f"✅ {selected_scenario_label} started")
                 st.rerun()
-        
+
         with col_stop:
-            if st.button("⏹️ Stop Scenario", use_container_width=True, key="btn_stop_scenario"):
-                with open(st.session_state.lidar_a_log_path, 'a') as f:
-                    epoch_ns = now_epoch_ns()
-                    elapsed = int((epoch_ns - st.session_state.session_start_epoch_ns) / 1_000_000_000)
-                    f.write(f"scenario_end,{fmt_hms_from_ns(epoch_ns)},{elapsed},{epoch_ns},{scenario_id},{zone},{num_people},{occlusion},{notes},ok\n")
+            if st.button("⏹️ Stop Scenario", use_container_width=True, key="btn_stop_scenario",
+                         disabled=not bool(open_scenario)):
+                scenario_label_full = selected_scenario_data['label']
+                epoch_ns_a = now_epoch_ns()
+                with open(st.session_state.lidar_a_log_path, 'a', newline='') as f:
+                    elapsed = int((epoch_ns_a - st.session_state.session_start_epoch_ns) / 1_000_000_000)
+                    csv.writer(f).writerow(["scenario_end", fmt_hms_from_ns(epoch_ns_a), elapsed, epoch_ns_a,
+                                             scenario_id, scenario_label_full, zone, num_people, occlusion, notes, "ok"])
+                epoch_ns_b = None
                 if st.session_state.lidar_b_log_path:
-                    with open(st.session_state.lidar_b_log_path, 'a') as f:
-                        epoch_ns = now_epoch_ns()
-                        elapsed = int((epoch_ns - st.session_state.session_start_epoch_ns) / 1_000_000_000)
-                        f.write(f"scenario_end,{fmt_hms_from_ns(epoch_ns)},{elapsed},{epoch_ns},{scenario_id},{zone},{num_people},{occlusion},{notes},ok\n")
+                    epoch_ns_b = now_epoch_ns()
+                    with open(st.session_state.lidar_b_log_path, 'a', newline='') as f:
+                        elapsed = int((epoch_ns_b - st.session_state.session_start_epoch_ns) / 1_000_000_000)
+                        csv.writer(f).writerow(["scenario_end", fmt_hms_from_ns(epoch_ns_b), elapsed, epoch_ns_b,
+                                                 scenario_id, scenario_label_full, zone, num_people, occlusion, notes, "ok"])
+
+                # Read start/end back from the log files just written, rather than
+                # session_state: the live-monitor auto-refresh (below) reruns this
+                # script every 2s while a session is active, which can race with
+                # session_state set by the Start Scenario click across reruns.
+                base = st.session_state.session_base
+
+                intervals_a = pcap_to_pcd.load_scenario_intervals(st.session_state.lidar_a_log_path)
+                matches_a = [iv for iv in intervals_a if iv[2] == scenario_id]
+                if matches_a and base:
+                    start_ns_a, end_ns_a, _ = matches_a[-1]
+                    pcap_a = os.path.join(base, 'raw', 'pcap', 'lidar_A.pcap')
+                    out_dir_a = os.path.join(base, 'derived', 'lidar_A', 'pcd')
+                    log_path = os.path.join(base, 'logs', 'process_scenario.log')
+
+                    cmd = [sys.executable, os.path.join(PROJECT_ROOT, 'scripts', 'process_scenario.py'),
+                           '--scenario_id', scenario_id,
+                           '--pcap_a', pcap_a, '--out_dir_a', out_dir_a,
+                           '--start_ns_a', str(start_ns_a), '--end_ns_a', str(end_ns_a)]
+
+                    has_b = False
+                    if st.session_state.lidar_b_log_path:
+                        intervals_b = pcap_to_pcd.load_scenario_intervals(st.session_state.lidar_b_log_path)
+                        matches_b = [iv for iv in intervals_b if iv[2] == scenario_id]
+                        if matches_b:
+                            has_b = True
+                            start_ns_b, end_ns_b, _ = matches_b[-1]
+                            pcap_b = os.path.join(base, 'raw', 'pcap', 'lidar_B.pcap')
+                            out_dir_b = os.path.join(base, 'derived', 'lidar_B', 'pcd')
+                            sync_out = os.path.join(base, 'derived', f'sync_{scenario_id}.csv')
+                            cmd += ['--pcap_b', pcap_b, '--out_dir_b', out_dir_b,
+                                    '--start_ns_b', str(start_ns_b), '--end_ns_b', str(end_ns_b),
+                                    '--sync_out', sync_out]
+
+                    # Runs the whole pipeline (PCD + pcap for A, then B, then
+                    # timestamp sync) as one detached background process, so
+                    # the button click returns immediately and the sync step
+                    # is guaranteed to run only after both sensors are done.
+                    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                    log_f = open(log_path, 'a')
+                    subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, start_new_session=True)
+
+                    if has_b:
+                        st.info(f"🟢🔵 {scenario_id}: extraction PCD + pcap (A et B) puis synchronisation "
+                                f"lancées en arrière-plan (voir {log_path})")
+                    else:
+                        st.info(f"🟢 lidar_A / {scenario_id}: extraction PCD + pcap lancée en arrière-plan (voir {log_path})")
                 st.success("✅ Scenario stopped")
                 st.rerun()
+
+        pipeline_log = os.path.join(st.session_state.session_base, 'logs', 'process_scenario.log') if st.session_state.session_base else None
+        if pipeline_log and os.path.exists(pipeline_log):
+            last_lines = tail_lines(pipeline_log, n=6)
+            last_text = "\n".join(last_lines)
+            if "ATTENTION" in last_text or "Traceback" in last_text or "Error" in last_text:
+                status_icon = "⚠️"
+            elif any("synchronisation OK" in l or "pas d'etape de synchronisation" in l for l in last_lines):
+                status_icon = "✅"
+            else:
+                status_icon = "⏳"
+            with st.expander(f"{status_icon} Statut du pipeline en arrière-plan (extraction + synchro)"):
+                st.code(last_text or "(vide)", language="text")
     else:
         st.info("👈 Veuillez sélectionner un scénario")
 else:
@@ -875,7 +1091,7 @@ else:
 st.divider()
 st.subheader("Logs")
 
-if st.session_state.scenario_log_path:
+if st.session_state.scenario_log_path or session_active:
     tab_labels = ["📋 Session Log", "🔴 Lidar A Log"]
     if st.session_state.lidar_b_log_path:
         tab_labels.append("🔵 Lidar B Log")
@@ -917,3 +1133,11 @@ else:
 # ========== FOOTER ==========
 st.divider()
 st.caption("Lidar Session Manager v1.0 | Powered by Streamlit")
+
+# Auto-refresh goes last, after the whole page (including Scénarios and Logs)
+# has rendered — doing this earlier in the script meant st.rerun() aborted
+# the run before those sections were ever reached, making them unusable
+# whenever a session was active (auto-refresh defaults to on).
+if st.session_state.recorder_proc and st.session_state.session_base and st.session_state.auto_refresh_live:
+    time.sleep(2)
+    st.rerun()

@@ -1,10 +1,26 @@
 webui/.venv/
+webui/.venv_test/
 webui/data/
 data/
 .run/
 recorder/build/
+recorder/build_test/
+.pytest_cache/
 *.pcap
 *.bag
 *.mcap
 __pycache__/
 *.pyc
+.vscode/
+guide_participant.pdf
+
+# Dossiers de sessions reelles creees par erreur via le champ "Data Root Dir"
+# de l'UI (nom tape au clavier au lieu du chemin par defaut data/) --
+# contiennent des donnees de participants deja enregistrees, ne jamais
+# les committer ni les supprimer.
+webui/DualHadil3/
+webui/Hadill/
+webui/Imed/
+webui/data123/
+webui/data1234/
+webui/data12345/

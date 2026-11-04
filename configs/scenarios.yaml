@@ -1,49 +1,28 @@
 # Liste des scénarios
+#
+# D1/D2/D3, T1 et T3 (anciennes versions) ont été fusionnés en un seul
+# scénario "routine libre" : dans une activité quotidienne réelle, marcher,
+# s'arrêter, s'asseoir et changer de pièce ne sont pas des comportements
+# distincts qu'on dirige séparément, mais une seule séquence continue.
+# T2 reste séparé : ce n'est pas un mouvement mais une condition de test
+# distincte (occlusion par un meuble).
 scenarios:
   # Déplacement (D)
   - id: D1
-    label: "Déplacement naturel (baseline)"
+    label: "Routine de déplacement naturelle (marche, arrêts, assise, entrées/sorties, changements de zone)"
     category: "Déplacement"
-    zone: "Z2"
-    difficulty: "facile"
-    num_people: 1
-    
-  - id: D2
-    label: "Personne statique (assis salon)"
-    category: "Déplacement"
-    zone: "Z2"
+    zone: "Z1 ↔ Z2"
     difficulty: "facile à intermédiaire"
     num_people: 1
-    
-  - id: D3
-    label: "Entrée / sortie naturelle"
-    category: "Déplacement"
-    zone: "Z1"
-    difficulty: "intermédiaire"
-    num_people: 1
-  
-  # Stop-and-Go (T)
-  - id: T1
-    label: "Stop-and-Go naturel"
-    category: "Arrêt"
-    zone: "Z2 ou Z1"
-    difficulty: "intermédiaire"
-    num_people: 1
-    
+
+  # Occlusion (T)
   - id: T2
     label: "Occlusion naturelle par mobilier"
     category: "Arrêt"
     zone: "Z2"
     difficulty: "intermédiaire à difficile"
     num_people: 1
-    
-  - id: T3
-    label: "Transition inter-zones (Z1 ↔ Z2)"
-    category: "Arrêt"
-    zone: "Z1 ↔ Z2"
-    difficulty: "intermédiaire"
-    num_people: 1
-  
+
   # Activités (A)
   - id: A1
     label: "Entrer avec un sac d'épicerie"
@@ -65,7 +44,21 @@ scenarios:
     zone: "Z1"
     difficulty: "difficile"
     num_people: 1
-  
+
+  - id: A4
+    label: "Se pencher / s'accroupir pour ramasser un objet au sol"
+    category: "Activités"
+    zone: "Z1 ↔ Z2"
+    difficulty: "intermédiaire"
+    num_people: 1
+
+  - id: A5
+    label: "Balayer ou passer l'aspirateur"
+    category: "Activités"
+    zone: "Z1 ↔ Z2"
+    difficulty: "intermédiaire"
+    num_people: 1
+
   # Multi-personnes (M)
   - id: M1
     label: "Croisement naturel"
