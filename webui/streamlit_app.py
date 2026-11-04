@@ -797,8 +797,8 @@ if session_active:
                     # the button click returns immediately and the sync step
                     # is guaranteed to run only after both sensors are done.
                     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-                    log_f = open(log_path, 'a')
-                    subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, start_new_session=True)
+                    with open(log_path, 'a') as log_f:
+                        subprocess.Popen(cmd, stdout=log_f, stderr=subprocess.STDOUT, start_new_session=True)
 
                     if has_b:
                         st.info(f"🟢🔵 {scenario_id}: extraction PCD + pcap (A et B) puis synchronisation "
