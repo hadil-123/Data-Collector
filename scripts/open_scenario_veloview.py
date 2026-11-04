@@ -22,14 +22,33 @@ import subprocess
 import sys
 import tempfile
 
-DEFAULT_VELOVIEW_BIN = (
+import yaml
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TOOLS_CONFIG_PATH = os.path.join(PROJECT_ROOT, 'configs', 'tools.yaml')
+
+# Used only if configs/tools.yaml is missing or doesn't set these keys.
+FALLBACK_VELOVIEW_BIN = (
     "/home/local/USHERBROOKE/elth7585/Téléchargements/"
     "VeloView-5.1.0-Ubuntu18.04-x86_64/bin/VeloView"
 )
-DEFAULT_CALIBRATION = (
+FALLBACK_CALIBRATION = (
     "/home/local/USHERBROOKE/elth7585/Téléchargements/"
     "VeloView-5.1.0-Ubuntu18.04-x86_64/share/VLP-32c.xml"
 )
+
+
+def load_tools_config():
+    try:
+        with open(TOOLS_CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+    except OSError:
+        cfg = {}
+    veloview = cfg.get('veloview') if isinstance(cfg.get('veloview'), dict) else {}
+    return {
+        'veloview_bin': veloview.get('bin', FALLBACK_VELOVIEW_BIN),
+        'calibration': veloview.get('calibration', FALLBACK_CALIBRATION),
+    }
 
 STARTUP_SCRIPT_TEMPLATE = """\
 from PythonQt.QtCore import QTimer
@@ -60,8 +79,9 @@ def main():
                          help="Which take/prise of this scenario to open (1-based) — a scenario_id repeated "
                               "several times in one session produces <id>.pcap, <id>_2.pcap, <id>_3.pcap, ... "
                               "matching the order used by pcap_to_pcd.py's overwrite-protection naming")
-    parser.add_argument("--veloview_bin", default=DEFAULT_VELOVIEW_BIN)
-    parser.add_argument("--calibration", default=DEFAULT_CALIBRATION)
+    tools_cfg = load_tools_config()
+    parser.add_argument("--veloview_bin", default=tools_cfg['veloview_bin'])
+    parser.add_argument("--calibration", default=tools_cfg['calibration'])
     args = parser.parse_args()
 
     if not os.path.isfile(args.veloview_bin):

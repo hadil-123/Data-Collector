@@ -1,0 +1,5 @@
+# Outils externes utilises par les scripts de visualisation (specifiques a
+# cette machine - chemins d'installation locaux).
+veloview:
+  bin: /home/local/USHERBROOKE/elth7585/Téléchargements/VeloView-5.1.0-Ubuntu18.04-x86_64/bin/VeloView
+  calibration: /home/local/USHERBROOKE/elth7585/Téléchargements/VeloView-5.1.0-Ubuntu18.04-x86_64/share/VLP-32c.xml
