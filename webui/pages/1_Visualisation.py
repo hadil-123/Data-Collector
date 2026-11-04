@@ -76,17 +76,20 @@ take_start_ns, take_end_ns = (takes[take_idx][0], takes[take_idx][1]) if takes e
 st.divider()
 
 video_a = vh.video_path(session_base, 'lidar_A', scenario_id, take_idx)
-video_b = vh.video_path(session_base, 'lidar_B', scenario_id, take_idx)
 dir_a = vh.pcd_dir(session_base, 'lidar_A', scenario_id)
 dir_b = vh.pcd_dir(session_base, 'lidar_B', scenario_id)
+has_sensor_b = os.path.isdir(dir_b)
+video_b = vh.video_path(session_base, 'lidar_B', scenario_id, take_idx) if has_sensor_b else None
 
-missing_videos = [p for p in (video_a, video_b) if not os.path.exists(p)]
+sensors = [("A", dir_a, video_a)] + ([("B", dir_b, video_b)] if has_sensor_b else [])
+missing_videos = [vpath for _, _, vpath in sensors if not os.path.exists(vpath)]
 
 if missing_videos:
     st.info("Les vidéos de cette prise n'ont pas encore été générées (rendu à partir des frames PCD, ~1-2 min).")
-    if st.button("🎬 Générer les vidéos (Capteur A + B)", use_container_width=True):
+    label_btn = "Capteur A + B" if has_sensor_b else "Capteur A"
+    if st.button(f"🎬 Générer les vidéos ({label_btn})", use_container_width=True):
         progress = st.empty()
-        for label, pdir, vpath in (("A", dir_a, video_a), ("B", dir_b, video_b)):
+        for label, pdir, vpath in sensors:
             if os.path.exists(vpath):
                 continue
             progress.info(f"Génération de la vidéo Capteur {label}...")
@@ -101,16 +104,20 @@ if missing_videos:
         progress.empty()
         st.rerun()
 else:
-    col_a, col_b = st.columns(2)
-    with col_a:
+    if has_sensor_b:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("Capteur A")
+            st.video(video_a)
+        with col_b:
+            st.subheader("Capteur B")
+            st.video(video_b)
+    else:
         st.subheader("Capteur A")
         st.video(video_a)
-    with col_b:
-        st.subheader("Capteur B")
-        st.video(video_b)
 
     if st.button("🔄 Régénérer les vidéos"):
-        for vpath in (video_a, video_b):
+        for _, _, vpath in sensors:
             try:
                 os.remove(vpath)
             except OSError:
